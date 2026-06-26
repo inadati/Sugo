@@ -63,35 +63,63 @@ impl SugoServer {
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
 
-    /// Report a harness's current status and any draft cells.
-    #[tool(description = "Get a harness's status: current version, has_draft flag, \
-        the board definition, and the draft_diff (newly added draft cells).")]
+    /// Report a harness's current status, or a summary of all harnesses.
+    #[tool(description = "Get status. With harness_id: returns { harness_id, name, \
+        current_version, has_draft, cells:[{id,name,status,terminal}], edges:[...], \
+        draft_diff:[{cell_id,name}] }. Without harness_id: returns { harnesses: \
+        [{harness_id,name,current_version,has_draft}, ...] }.")]
     async fn sugo_status(
         &self,
         Parameters(args): Parameters<tools::StatusArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        use sugo_core::usecase::get_status::get_status;
+        use sugo_core::usecase::get_status::{get_status, list_harness_summaries};
 
-        let st = get_status(self.repo.as_ref(), &args.harness_id)
-            .await
-            .map_err(error::to_tool_error)?;
+        let payload = match args.harness_id {
+            Some(harness_id) => {
+                let st = get_status(self.repo.as_ref(), &harness_id)
+                    .await
+                    .map_err(error::to_tool_error)?;
 
-        let definition: serde_json::Value = serde_json::from_str(&st.definition_json)
-            .map_err(|e| ErrorData::internal_error(format!("[storage_error] {e}"), None))?;
-        let draft_diff: Vec<serde_json::Value> = st
-            .draft_diff
-            .iter()
-            .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name }))
-            .collect();
+                // The stored definition is a structured object; expose its cells
+                // and edges as top-level keys per the design I/O contract.
+                let definition: serde_json::Value =
+                    serde_json::from_str(&st.definition_json).map_err(error::serde_to_tool_error)?;
+                let cells = definition.get("cells").cloned().unwrap_or(serde_json::json!([]));
+                let edges = definition.get("edges").cloned().unwrap_or(serde_json::json!([]));
+                let draft_diff: Vec<serde_json::Value> = st
+                    .draft_diff
+                    .iter()
+                    .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name }))
+                    .collect();
 
-        let payload = serde_json::json!({
-            "harness_id": st.harness_id,
-            "name": st.name,
-            "current_version": st.current_version,
-            "has_draft": st.has_draft,
-            "draft_diff": draft_diff,
-            "definition": definition,
-        });
+                serde_json::json!({
+                    "harness_id": st.harness_id,
+                    "name": st.name,
+                    "current_version": st.current_version,
+                    "has_draft": st.has_draft,
+                    "cells": cells,
+                    "edges": edges,
+                    "draft_diff": draft_diff,
+                })
+            }
+            None => {
+                let summaries = list_harness_summaries(self.repo.as_ref())
+                    .await
+                    .map_err(error::to_tool_error)?;
+                let harnesses: Vec<serde_json::Value> = summaries
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "harness_id": s.harness_id,
+                            "name": s.name,
+                            "current_version": s.current_version,
+                            "has_draft": s.has_draft,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "harnesses": harnesses })
+            }
+        };
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
 
@@ -127,20 +155,38 @@ impl SugoServer {
     }
 
     /// Validate a harness's board structure and return any issues.
-    #[tool(description = "Validate a harness's structure. Returns { ok, issues } where each \
-        issue has severity, code, message and an optional cell_id.")]
+    #[tool(description = "Validate board structure. Pass harness_id to validate a stored \
+        harness, or definition to validate a board definition directly (exactly one). \
+        Returns { ok, issues } where each issue has severity, code, message and an \
+        optional cell_id.")]
     async fn sugo_validate_harness(
         &self,
         Parameters(args): Parameters<tools::ValidateArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::validate_harness::validate_harness;
+        use sugo_core::validate::validate_definition;
 
-        let report = validate_harness(self.repo.as_ref(), &args.harness_id)
-            .await
-            .map_err(error::to_tool_error)?;
+        // Boundary input validation: exactly one of harness_id / definition.
+        let report = match (args.harness_id, args.definition) {
+            (Some(_), Some(_)) => {
+                return Err(ErrorData::invalid_params(
+                    "provide exactly one of harness_id or definition, not both",
+                    Some(serde_json::json!({ "code": "invalid_arguments" })),
+                ));
+            }
+            (None, None) => {
+                return Err(ErrorData::invalid_params(
+                    "one of harness_id or definition is required",
+                    Some(serde_json::json!({ "code": "invalid_arguments" })),
+                ));
+            }
+            (Some(harness_id), None) => validate_harness(self.repo.as_ref(), &harness_id)
+                .await
+                .map_err(error::to_tool_error)?,
+            (None, Some(def)) => validate_definition(&def),
+        };
 
-        let json = serde_json::to_string(&report)
-            .map_err(|e| ErrorData::internal_error(format!("[storage_error] {e}"), None))?;
+        let json = serde_json::to_string(&report).map_err(error::serde_to_tool_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }

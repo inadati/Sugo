@@ -10,10 +10,21 @@ pub enum Severity {
     Warning,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueCode {
+    DuplicateCellId,
+    StartMissing,
+    UnknownCellRef,
+    UnreachableCell,
+    NoTerminal,
+    HasDraft,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationIssue {
     pub severity: Severity,
-    pub code: String,
+    pub code: IssueCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_id: Option<String>,
@@ -25,8 +36,8 @@ pub struct ValidationReport {
     pub issues: Vec<ValidationIssue>,
 }
 
-fn err(code: &str, message: String, cell_id: Option<String>) -> ValidationIssue {
-    ValidationIssue { severity: Severity::Error, code: code.into(), message, cell_id }
+fn err(code: IssueCode, message: String, cell_id: Option<String>) -> ValidationIssue {
+    ValidationIssue { severity: Severity::Error, code, message, cell_id }
 }
 
 pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
@@ -37,7 +48,7 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
     for c in &board.cells {
         if !seen.insert(c.id.as_str()) {
             issues.push(err(
-                "duplicate_cell_id",
+                IssueCode::DuplicateCellId,
                 format!("duplicate cell id: {}", c.id),
                 Some(c.id.clone()),
             ));
@@ -48,7 +59,7 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
     // start_missing
     if !ids.contains(board.start.as_str()) {
         issues.push(err(
-            "start_missing",
+            IssueCode::StartMissing,
             format!("start cell not found: {}", board.start),
             None,
         ));
@@ -58,14 +69,14 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
     for e in &board.edges {
         if !ids.contains(e.from.as_str()) {
             issues.push(err(
-                "unknown_cell_ref",
+                IssueCode::UnknownCellRef,
                 format!("edge.from unknown: {}", e.from),
                 Some(e.from.clone()),
             ));
         }
         if !ids.contains(e.to.as_str()) {
             issues.push(err(
-                "unknown_cell_ref",
+                IssueCode::UnknownCellRef,
                 format!("edge.to unknown: {}", e.to),
                 Some(e.to.clone()),
             ));
@@ -88,7 +99,7 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
         for c in &board.cells {
             if !reachable.contains(c.id.as_str()) {
                 issues.push(err(
-                    "unreachable_cell",
+                    IssueCode::UnreachableCell,
                     format!("cell unreachable from start: {}", c.id),
                     Some(c.id.clone()),
                 ));
@@ -98,7 +109,7 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
 
     // no_terminal
     if !board.cells.iter().any(|c| c.terminal) {
-        issues.push(err("no_terminal", "no terminal cell".into(), None));
+        issues.push(err(IssueCode::NoTerminal, "no terminal cell".into(), None));
     }
 
     // has_draft (warning)
@@ -106,7 +117,7 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
         if c.status == CellStatus::Draft {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
-                code: "has_draft".into(),
+                code: IssueCode::HasDraft,
                 message: format!("draft cell: {}", c.id),
                 cell_id: Some(c.id.clone()),
             });
@@ -115,6 +126,10 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
 
     let ok = !issues.iter().any(|i| i.severity == Severity::Error);
     ValidationReport { ok, issues }
+}
+
+pub fn validate_definition(def: &BoardDefinition) -> ValidationReport {
+    validate_board(def)
 }
 
 #[cfg(test)]
@@ -133,8 +148,9 @@ mod tests {
     fn board(cells: Vec<Cell>, edges: Vec<Edge>, start: &str) -> BoardDefinition {
         BoardDefinition { schema_version: 1, start: start.into(), cells, edges }
     }
-    fn codes(r: &ValidationReport) -> Vec<String> {
-        r.issues.iter().map(|i| i.code.clone()).collect()
+    /// 指定 code の issue を返す（存在しなければ None）。
+    fn find(r: &ValidationReport, code: IssueCode) -> Option<&ValidationIssue> {
+        r.issues.iter().find(|i| i.code == code)
     }
 
     #[test]
@@ -156,13 +172,19 @@ mod tests {
             vec![],
             "c1",
         );
-        assert!(codes(&validate_board(&b)).contains(&"duplicate_cell_id".to_string()));
+        let r = validate_board(&b);
+        let issue = find(&r, IssueCode::DuplicateCellId).expect("duplicate_cell_id issue");
+        assert_eq!(issue.severity, Severity::Error);
+        assert!(!r.ok);
     }
 
     #[test]
     fn detects_start_missing() {
         let b = board(vec![cell("c1", true, CellStatus::Active)], vec![], "nope");
-        assert!(codes(&validate_board(&b)).contains(&"start_missing".to_string()));
+        let r = validate_board(&b);
+        let issue = find(&r, IssueCode::StartMissing).expect("start_missing issue");
+        assert_eq!(issue.severity, Severity::Error);
+        assert!(!r.ok);
     }
 
     #[test]
@@ -172,7 +194,10 @@ mod tests {
             vec![edge("c1", "ghost")],
             "c1",
         );
-        assert!(codes(&validate_board(&b)).contains(&"unknown_cell_ref".to_string()));
+        let r = validate_board(&b);
+        let issue = find(&r, IssueCode::UnknownCellRef).expect("unknown_cell_ref issue");
+        assert_eq!(issue.severity, Severity::Error);
+        assert!(!r.ok);
     }
 
     #[test]
@@ -185,7 +210,10 @@ mod tests {
             vec![],
             "c1",
         );
-        assert!(codes(&validate_board(&b)).contains(&"unreachable_cell".to_string()));
+        let r = validate_board(&b);
+        let issue = find(&r, IssueCode::UnreachableCell).expect("unreachable_cell issue");
+        assert_eq!(issue.severity, Severity::Error);
+        assert!(!r.ok);
     }
 
     #[test]
@@ -195,7 +223,10 @@ mod tests {
             vec![edge("c1", "c2")],
             "c1",
         );
-        assert!(codes(&validate_board(&b)).contains(&"no_terminal".to_string()));
+        let r = validate_board(&b);
+        let issue = find(&r, IssueCode::NoTerminal).expect("no_terminal issue");
+        assert_eq!(issue.severity, Severity::Error);
+        assert!(!r.ok);
     }
 
     #[test]
@@ -206,8 +237,34 @@ mod tests {
             "c1",
         );
         let r = validate_board(&b);
-        let draft = r.issues.iter().find(|i| i.code == "has_draft").unwrap();
+        let draft = find(&r, IssueCode::HasDraft).expect("has_draft issue");
         assert_eq!(draft.severity, Severity::Warning);
         assert!(r.ok); // warning のみなら ok=true
+    }
+
+    #[test]
+    fn issue_code_serializes_to_snake_case_json() {
+        // JSON 出力形が設計の固定文字列集合と一致することを固定する。
+        let pairs = [
+            (IssueCode::DuplicateCellId, "\"duplicate_cell_id\""),
+            (IssueCode::StartMissing, "\"start_missing\""),
+            (IssueCode::UnknownCellRef, "\"unknown_cell_ref\""),
+            (IssueCode::UnreachableCell, "\"unreachable_cell\""),
+            (IssueCode::NoTerminal, "\"no_terminal\""),
+            (IssueCode::HasDraft, "\"has_draft\""),
+        ];
+        for (code, json) in pairs {
+            assert_eq!(serde_json::to_string(&code).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn validate_definition_wraps_validate_board() {
+        let b = board(
+            vec![cell("c1", false, CellStatus::Active), cell("c2", true, CellStatus::Active)],
+            vec![edge("c1", "c2")],
+            "c1",
+        );
+        assert_eq!(validate_definition(&b), validate_board(&b));
     }
 }

@@ -8,7 +8,9 @@ sugo-core = { path = "../sugo-core" }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
+# test-support enables sugo_core::contract（共有契約関数）と fake::FakeIdClock を
+# 統合テストで使用するために必須。tokio は #[tokio::test] 用。
 sugo-core = { path = "../sugo-core", features = ["test-support"] }
+tokio = { workspace = true }

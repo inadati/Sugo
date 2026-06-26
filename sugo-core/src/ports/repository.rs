@@ -70,14 +70,25 @@ pub mod fake {
             harness: &Harness,
             version: &BoardVersion,
         ) -> Result<(), CoreError> {
-            self.harnesses
-                .lock()
-                .unwrap()
-                .insert(harness.id.clone(), harness.clone());
-            self.versions.lock().unwrap().insert(
-                (version.harness_id.clone(), version.version_no),
-                version.clone(),
-            );
+            let mut hs = self.harnesses.lock().unwrap();
+            // sqlite の id PRIMARY KEY と同様、重複 id は黙って上書きせず拒否する。
+            if hs.contains_key(&harness.id) {
+                return Err(CoreError::Storage(format!(
+                    "duplicate harness id: {}",
+                    harness.id
+                )));
+            }
+            let mut vs = self.versions.lock().unwrap();
+            let vkey = (version.harness_id.clone(), version.version_no);
+            // sqlite の UNIQUE(harness_id, version_no) と同様、重複バージョンは拒否する。
+            if vs.contains_key(&vkey) {
+                return Err(CoreError::Storage(format!(
+                    "duplicate version_no {} for harness {}",
+                    version.version_no, version.harness_id
+                )));
+            }
+            hs.insert(harness.id.clone(), harness.clone());
+            vs.insert(vkey, version.clone());
             Ok(())
         }
         async fn get(&self, id: &str) -> Result<Option<(Harness, BoardVersion)>, CoreError> {
@@ -127,11 +138,18 @@ pub mod fake {
                     actual: cur.lock_version,
                 });
             }
+            let mut vs = self.versions.lock().unwrap();
+            let vkey = (version.harness_id.clone(), version.version_no);
+            // sqlite の UNIQUE(harness_id, version_no) と同様、重複バージョンの
+            // 黙った上書き（board_version 不変性の破壊）を拒否する。
+            if vs.contains_key(&vkey) {
+                return Err(CoreError::Storage(format!(
+                    "duplicate version_no {} for harness {}",
+                    version.version_no, version.harness_id
+                )));
+            }
             hs.insert(harness.id.clone(), harness.clone());
-            self.versions.lock().unwrap().insert(
-                (version.harness_id.clone(), version.version_no),
-                version.clone(),
-            );
+            vs.insert(vkey, version.clone());
             Ok(())
         }
     }

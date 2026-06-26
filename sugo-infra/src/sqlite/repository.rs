@@ -37,9 +37,13 @@ fn map_err(e: rusqlite::Error) -> CoreError {
 #[async_trait]
 impl HarnessRepository for SqliteHarnessRepository {
     async fn create(&self, harness: &Harness, version: &BoardVersion) -> Result<(), CoreError> {
-        let conn = self.conn.lock().unwrap();
-        insert_harness(&conn, harness)?;
-        insert_version(&conn, version)?;
+        let mut conn = self.conn.lock().unwrap();
+        // INSERT harnesses + INSERT board_version を1トランザクションにまとめ、
+        // 途中失敗時に部分コミットを残さない（rollback）。
+        let tx = conn.transaction().map_err(map_err)?;
+        insert_harness(&tx, harness)?;
+        insert_version(&tx, version)?;
+        tx.commit().map_err(map_err)?;
         Ok(())
     }
 
@@ -86,8 +90,14 @@ impl HarnessRepository for SqliteHarnessRepository {
         version: &BoardVersion,
         expected_lock: i64,
     ) -> Result<(), CoreError> {
-        let conn = self.conn.lock().unwrap();
-        let current = select_harness(&conn, &harness.id)?
+        let mut conn = self.conn.lock().unwrap();
+        // 「lock_version 読取 → 比較 → INSERT board_version → UPDATE harnesses」を
+        // 1トランザクションにまとめる。途中失敗時は commit せず rollback され、
+        // board_version だけ残る不整合を防ぐ。
+        let tx = conn.transaction().map_err(map_err)?;
+
+        // 事前 SELECT で NotFound / LockConflict を区別して返す。
+        let current = select_harness(&tx, &harness.id)?
             .ok_or_else(|| CoreError::NotFound(harness.id.clone()))?;
         if current.lock_version != expected_lock {
             return Err(CoreError::LockConflict {
@@ -95,18 +105,33 @@ impl HarnessRepository for SqliteHarnessRepository {
                 actual: current.lock_version,
             });
         }
-        insert_version(&conn, version)?;
-        conn.execute(
-            "UPDATE harnesses SET current_version=?1, has_draft=?2, lock_version=?3, updated_at=?4 WHERE id=?5",
-            rusqlite::params![
-                harness.current_version,
-                harness.has_draft as i64,
-                harness.lock_version,
-                harness.updated_at,
-                harness.id
-            ],
-        )
-        .map_err(map_err)?;
+
+        // 不変 board_version を追加（UNIQUE(harness_id, version_no) で重複拒否）。
+        insert_version(&tx, version)?;
+
+        // CAS ガード付き UPDATE。WHERE id=? AND lock_version=?expected により
+        // DBレベルで原子的に更新し、0 行更新（= 期待ロック不一致）なら LockConflict。
+        let affected = tx
+            .execute(
+                "UPDATE harnesses SET current_version=?1, has_draft=?2, lock_version=?3, updated_at=?4 WHERE id=?5 AND lock_version=?6",
+                rusqlite::params![
+                    harness.current_version,
+                    harness.has_draft as i64,
+                    harness.lock_version,
+                    harness.updated_at,
+                    harness.id,
+                    expected_lock
+                ],
+            )
+            .map_err(map_err)?;
+        if affected == 0 {
+            return Err(CoreError::LockConflict {
+                expected: expected_lock,
+                actual: current.lock_version,
+            });
+        }
+
+        tx.commit().map_err(map_err)?;
         Ok(())
     }
 }

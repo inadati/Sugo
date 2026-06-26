@@ -36,8 +36,9 @@ pub struct CreateArgs {
 /// Arguments for `sugo_status`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StatusArgs {
-    /// Target harness id.
-    pub harness_id: String,
+    /// Target harness id. When omitted, a summary of all harnesses is returned.
+    #[serde(default)]
+    pub harness_id: Option<String>,
 }
 
 /// Arguments for `sugo_edit_cell`.
@@ -54,10 +55,17 @@ pub struct EditArgs {
 }
 
 /// Arguments for `sugo_validate_harness`.
+///
+/// Either a stored harness is validated via `harness_id`, or a board
+/// `definition` is validated directly. Exactly one must be supplied.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ValidateArgs {
-    /// Target harness id.
-    pub harness_id: String,
+    /// Target harness id. Mutually exclusive with `definition`.
+    #[serde(default)]
+    pub harness_id: Option<String>,
+    /// Board definition to validate directly. Mutually exclusive with `harness_id`.
+    #[serde(default)]
+    pub definition: Option<BoardDefinition>,
 }
 
 #[cfg(test)]
@@ -97,5 +105,53 @@ mod tests {
         assert_eq!(args.cell_id, "c1");
         assert_eq!(args.prompt, "p");
         assert_eq!(args.expected_lock_version, 3);
+    }
+
+    #[test]
+    fn edit_args_missing_field_errors() {
+        // expected_lock_version is required; omitting it is a deserialize error.
+        let res: Result<EditArgs, _> =
+            serde_json::from_str(r#"{"harness_id":"h1","cell_id":"c1","prompt":"p"}"#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn status_args_with_harness_id() {
+        let args: StatusArgs = serde_json::from_str(r#"{"harness_id":"h1"}"#).unwrap();
+        assert_eq!(args.harness_id.as_deref(), Some("h1"));
+    }
+
+    #[test]
+    fn status_args_omitting_harness_id_defaults_to_none() {
+        // harness_id is optional; the empty object selects the all-summaries path.
+        let args: StatusArgs = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(args.harness_id.is_none());
+    }
+
+    #[test]
+    fn validate_args_with_harness_id() {
+        let args: ValidateArgs = serde_json::from_str(r#"{"harness_id":"h1"}"#).unwrap();
+        assert_eq!(args.harness_id.as_deref(), Some("h1"));
+        assert!(args.definition.is_none());
+    }
+
+    #[test]
+    fn validate_args_with_definition() {
+        let json = r#"{"definition":{"schema_version":1,"start":"c1",
+            "cells":[{"id":"c1","name":"c1","prompt":"p","status":"active","terminal":true}],
+            "edges":[]}}"#;
+        let args: ValidateArgs = serde_json::from_str(json).unwrap();
+        assert!(args.harness_id.is_none());
+        let def = args.definition.expect("definition present");
+        assert_eq!(def.start, "c1");
+        assert_eq!(def.cells.len(), 1);
+    }
+
+    #[test]
+    fn validate_args_empty_object_leaves_both_none() {
+        // Neither field supplied; the boundary then reports an error at call time.
+        let args: ValidateArgs = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(args.harness_id.is_none());
+        assert!(args.definition.is_none());
     }
 }

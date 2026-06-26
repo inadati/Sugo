@@ -114,6 +114,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn edit_missing_harness_is_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let err = edit_cell(
+            &repo,
+            &clock,
+            EditCellInput {
+                harness_id: "nope".into(),
+                cell_id: "start".into(),
+                prompt: "x".into(),
+                expected_lock_version: 0,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn edit_missing_cell_is_not_found() {
+        let (repo, clock, id) = seed().await;
+        let err = edit_cell(
+            &repo,
+            &clock,
+            EditCellInput {
+                harness_id: id,
+                cell_id: "ghost".into(),
+                prompt: "x".into(),
+                expected_lock_version: 0,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
     async fn edit_with_stale_lock_conflicts() {
         let (repo, clock, id) = seed().await;
         let err = edit_cell(
