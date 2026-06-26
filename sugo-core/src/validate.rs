@@ -3,36 +3,62 @@ use crate::domain::cell::CellStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 
+/// Severity of a single validation issue.
+///
+/// `Error` issues make the board invalid (`ValidationReport::ok == false`);
+/// `Warning` issues are advisory and do not flip `ok` to `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    /// Blocking problem; the board is considered invalid.
     Error,
+    /// Advisory problem; the board is still considered valid.
     Warning,
 }
 
+/// Stable machine-readable code identifying a category of validation issue.
+///
+/// Each variant serializes to the snake_case string used in the MCP I/O
+/// contract (see the P1 design doc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueCode {
+    /// Two or more cells share the same `id`.
     DuplicateCellId,
+    /// `board.start` does not reference any existing cell.
     StartMissing,
+    /// An edge endpoint (`from`/`to`) references an unknown cell id.
     UnknownCellRef,
+    /// A cell cannot be reached from `start` by following valid edges.
     UnreachableCell,
+    /// The board has no terminal cell, so a run could never finish.
     NoTerminal,
+    /// At least one cell is still in draft status (advisory warning).
     HasDraft,
 }
 
+/// A single problem found while validating a board definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationIssue {
+    /// Whether this issue blocks the board (`Error`) or is advisory (`Warning`).
     pub severity: Severity,
+    /// Stable code identifying the category of this issue.
     pub code: IssueCode,
+    /// Human-readable description of the problem.
     pub message: String,
+    /// The cell this issue concerns, when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_id: Option<String>,
 }
 
+/// The outcome of validating a board definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationReport {
+    /// `true` when there are no `Error`-severity issues. Note the non-obvious
+    /// rule: a report with only `Warning` issues still has `ok == true`; any
+    /// `Error` issue sets `ok == false`.
     pub ok: bool,
+    /// All issues found, in detection order (errors and warnings interleaved).
     pub issues: Vec<ValidationIssue>,
 }
 
@@ -40,6 +66,13 @@ fn err(code: IssueCode, message: String, cell_id: Option<String>) -> ValidationI
     ValidationIssue { severity: Severity::Error, code, message, cell_id }
 }
 
+/// Validate a board definition and return all detected issues.
+///
+/// Runs the following structural checks: duplicate cell ids, missing `start`
+/// cell, unknown edge endpoints, cells unreachable from `start` (via a BFS
+/// over valid edges that is cycle-safe), absence of a terminal cell, and draft
+/// cells (reported as warnings). The returned [`ValidationReport::ok`] is
+/// `true` unless at least one `Error`-severity issue was found.
 pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
     let mut issues = Vec::new();
 
@@ -128,10 +161,6 @@ pub fn validate_board(board: &BoardDefinition) -> ValidationReport {
     ValidationReport { ok, issues }
 }
 
-pub fn validate_definition(def: &BoardDefinition) -> ValidationReport {
-    validate_board(def)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,7 +177,7 @@ mod tests {
     fn board(cells: Vec<Cell>, edges: Vec<Edge>, start: &str) -> BoardDefinition {
         BoardDefinition { schema_version: 1, start: start.into(), cells, edges }
     }
-    /// 指定 code の issue を返す（存在しなければ None）。
+    /// Return the issue with the given code, or None if absent.
     fn find(r: &ValidationReport, code: IssueCode) -> Option<&ValidationIssue> {
         r.issues.iter().find(|i| i.code == code)
     }
@@ -239,12 +268,12 @@ mod tests {
         let r = validate_board(&b);
         let draft = find(&r, IssueCode::HasDraft).expect("has_draft issue");
         assert_eq!(draft.severity, Severity::Warning);
-        assert!(r.ok); // warning のみなら ok=true
+        assert!(r.ok); // warning-only report is still ok=true
     }
 
     #[test]
     fn issue_code_serializes_to_snake_case_json() {
-        // JSON 出力形が設計の固定文字列集合と一致することを固定する。
+        // Pin the JSON output to the design's fixed string set.
         let pairs = [
             (IssueCode::DuplicateCellId, "\"duplicate_cell_id\""),
             (IssueCode::StartMissing, "\"start_missing\""),
@@ -259,12 +288,59 @@ mod tests {
     }
 
     #[test]
-    fn validate_definition_wraps_validate_board() {
+    fn reachability_handles_cycle_without_infinite_loop() {
+        // c1 -> c2 -> c1 forms a cycle; c1 -> c3 reaches the terminal c3.
+        // The BFS must terminate (cycle-safe) and report no unreachable cells.
         let b = board(
-            vec![cell("c1", false, CellStatus::Active), cell("c2", true, CellStatus::Active)],
-            vec![edge("c1", "c2")],
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", false, CellStatus::Active),
+                cell("c3", true, CellStatus::Active),
+            ],
+            vec![edge("c1", "c2"), edge("c2", "c1"), edge("c1", "c3")],
             "c1",
         );
-        assert_eq!(validate_definition(&b), validate_board(&b));
+        let r = validate_board(&b);
+        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "no cell should be unreachable in a cycle");
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn reachability_handles_diamond_branch() {
+        // Diamond: c1 -> c2, c1 -> c3, c2 -> c4, c3 -> c4. c4 is reached via two
+        // paths; the BFS must mark every cell reachable without misjudging the
+        // doubly-reached c4.
+        let b = board(
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", false, CellStatus::Active),
+                cell("c3", false, CellStatus::Active),
+                cell("c4", true, CellStatus::Active),
+            ],
+            vec![edge("c1", "c2"), edge("c1", "c3"), edge("c2", "c4"), edge("c3", "c4")],
+            "c1",
+        );
+        let r = validate_board(&b);
+        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "all diamond cells should be reachable");
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn reachability_handles_multi_hop_path() {
+        // Linear multi-hop path c1 -> c2 -> c3 -> c4 (terminal): every cell is
+        // reachable from start across several indirect hops.
+        let b = board(
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", false, CellStatus::Active),
+                cell("c3", false, CellStatus::Active),
+                cell("c4", true, CellStatus::Active),
+            ],
+            vec![edge("c1", "c2"), edge("c2", "c3"), edge("c3", "c4")],
+            "c1",
+        );
+        let r = validate_board(&b);
+        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "all cells on the path should be reachable");
+        assert!(r.ok);
     }
 }

@@ -84,7 +84,26 @@ impl SugoServer {
                 // and edges as top-level keys per the design I/O contract.
                 let definition: serde_json::Value =
                     serde_json::from_str(&st.definition_json).map_err(error::serde_to_tool_error)?;
-                let cells = definition.get("cells").cloned().unwrap_or(serde_json::json!([]));
+
+                // Project each cell down to the four contract keys
+                // {id,name,status,terminal}; `prompt` is intentionally omitted so
+                // it never leaks through the status response (design L115).
+                let cells: Vec<serde_json::Value> = definition
+                    .get("cells")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|cell| {
+                                serde_json::json!({
+                                    "id": cell.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                                    "name": cell.get("name").cloned().unwrap_or(serde_json::Value::Null),
+                                    "status": cell.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                                    "terminal": cell.get("terminal").cloned().unwrap_or(serde_json::Value::Null),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let edges = definition.get("edges").cloned().unwrap_or(serde_json::json!([]));
                 let draft_diff: Vec<serde_json::Value> = st
                     .draft_diff
@@ -164,7 +183,7 @@ impl SugoServer {
         Parameters(args): Parameters<tools::ValidateArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::validate_harness::validate_harness;
-        use sugo_core::validate::validate_definition;
+        use sugo_core::validate::validate_board;
 
         // Boundary input validation: exactly one of harness_id / definition.
         let report = match (args.harness_id, args.definition) {
@@ -183,7 +202,7 @@ impl SugoServer {
             (Some(harness_id), None) => validate_harness(self.repo.as_ref(), &harness_id)
                 .await
                 .map_err(error::to_tool_error)?,
-            (None, Some(def)) => validate_definition(&def),
+            (None, Some(def)) => validate_board(&def),
         };
 
         let json = serde_json::to_string(&report).map_err(error::serde_to_tool_error)?;
@@ -213,4 +232,233 @@ async fn main() -> anyhow::Result<()> {
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Handler-boundary tests: build a real [`SugoServer`] over an in-memory
+    //! SQLite repository and drive each tool handler directly, asserting on the
+    //! serialized payload shapes and on the structured error codes. These cover
+    //! the MCP I/O contract (cell key projection, exclusivity rules, response
+    //! envelopes) that pure argument-parsing unit tests cannot reach.
+
+    use super::*;
+    use sugo_core::domain::board::BoardDefinition;
+    use sugo_core::domain::cell::{Cell, CellStatus};
+
+    /// Build a server backed by a fresh in-memory database.
+    fn server() -> SugoServer {
+        let repo = Arc::new(SqliteHarnessRepository::in_memory().expect("in-memory db"));
+        SugoServer::new(repo)
+    }
+
+    /// Extract the single text payload from a successful tool result as JSON.
+    fn payload(result: &CallToolResult) -> serde_json::Value {
+        let text = result
+            .content
+            .first()
+            .expect("at least one content item")
+            .as_text()
+            .expect("text content")
+            .text
+            .clone();
+        serde_json::from_str(&text).expect("payload is valid JSON")
+    }
+
+    /// Read the structured `code` from an error response's `data` field.
+    fn error_code(e: &ErrorData) -> String {
+        e.data
+            .as_ref()
+            .expect("data present")
+            .get("code")
+            .expect("code key")
+            .as_str()
+            .expect("code is string")
+            .to_string()
+    }
+
+    /// A minimal valid board: one active terminal cell named `start`.
+    fn valid_board() -> BoardDefinition {
+        BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "start".into(),
+                prompt: "p".into(),
+                status: CellStatus::Active,
+                terminal: true,
+            }],
+            edges: vec![],
+        }
+    }
+
+    /// Create a harness through the tool handler and return its id.
+    async fn create_harness(srv: &SugoServer, name: &str, def: Option<BoardDefinition>) -> String {
+        let result = srv
+            .sugo_create_harness(Parameters(tools::CreateArgs {
+                name: name.into(),
+                definition: def,
+            }))
+            .await
+            .expect("create succeeds");
+        payload(&result)["harness_id"]
+            .as_str()
+            .expect("harness_id string")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_both_inputs() {
+        // (Some, Some): supplying both harness_id and definition is invalid.
+        let srv = server();
+        let err = srv
+            .sugo_validate_harness(Parameters(tools::ValidateArgs {
+                harness_id: Some("h1".into()),
+                definition: Some(valid_board()),
+            }))
+            .await
+            .expect_err("both inputs must be rejected");
+        assert_eq!(error_code(&err), "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_no_inputs() {
+        // (None, None): neither input supplied is invalid.
+        let srv = server();
+        let err = srv
+            .sugo_validate_harness(Parameters(tools::ValidateArgs {
+                harness_id: None,
+                definition: None,
+            }))
+            .await
+            .expect_err("missing inputs must be rejected");
+        assert_eq!(error_code(&err), "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn validate_by_harness_id_returns_report() {
+        // harness_id alone validates the stored harness via the DB.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_validate_harness(Parameters(tools::ValidateArgs {
+                harness_id: Some(id),
+                definition: None,
+            }))
+            .await
+            .expect("validate succeeds");
+        let p = payload(&result);
+        assert_eq!(p["ok"], serde_json::json!(true));
+        assert!(p["issues"].is_array());
+    }
+
+    #[tokio::test]
+    async fn validate_by_definition_is_db_independent() {
+        // definition alone validates directly without any stored harness, and an
+        // invalid board surfaces an error issue with ok == false.
+        let srv = server();
+        let bad = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "c1".into(),
+                prompt: "p".into(),
+                status: CellStatus::Active,
+                terminal: false, // no terminal cell -> error issue
+            }],
+            edges: vec![],
+        };
+        let result = srv
+            .sugo_validate_harness(Parameters(tools::ValidateArgs {
+                harness_id: None,
+                definition: Some(bad),
+            }))
+            .await
+            .expect("validate succeeds");
+        let p = payload(&result);
+        assert_eq!(p["ok"], serde_json::json!(false));
+        let issues = p["issues"].as_array().expect("issues array");
+        assert!(issues
+            .iter()
+            .any(|i| i["severity"] == serde_json::json!("error")));
+    }
+
+    #[tokio::test]
+    async fn status_detail_projects_cells_to_four_keys() {
+        // Detail mode must return cells with exactly {id,name,status,terminal}
+        // and never leak the `prompt` field. edges and draft_diff are top-level.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .await
+            .expect("status succeeds");
+        let p = payload(&result);
+
+        let cells = p["cells"].as_array().expect("cells array");
+        assert_eq!(cells.len(), 1);
+        let cell = cells[0].as_object().expect("cell object");
+        let mut keys: Vec<&String> = cell.keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["id", "name", "status", "terminal"]);
+        assert!(!cell.contains_key("prompt"), "prompt must not leak");
+
+        assert!(p["edges"].is_array(), "edges is a top-level array");
+        assert!(p["draft_diff"].is_array(), "draft_diff is a top-level array");
+    }
+
+    #[tokio::test]
+    async fn status_summary_returns_harness_list() {
+        // Without a harness_id, status returns the all-harnesses summary shape.
+        let srv = server();
+        create_harness(&srv, "a", None).await;
+        let result = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: None }))
+            .await
+            .expect("status succeeds");
+        let p = payload(&result);
+        let harnesses = p["harnesses"].as_array().expect("harnesses array");
+        assert_eq!(harnesses.len(), 1);
+        assert!(harnesses[0]["harness_id"].is_string());
+        assert!(harnesses[0]["current_version"].is_number());
+    }
+
+    #[tokio::test]
+    async fn create_harness_payload_shape() {
+        // Create returns harness_id plus version_no==1 and a lock_version.
+        let srv = server();
+        let result = srv
+            .sugo_create_harness(Parameters(tools::CreateArgs {
+                name: "h".into(),
+                definition: None,
+            }))
+            .await
+            .expect("create succeeds");
+        let p = payload(&result);
+        assert!(p["harness_id"].is_string());
+        assert_eq!(p["version_no"], serde_json::json!(1));
+        assert!(p["lock_version"].is_number());
+    }
+
+    #[tokio::test]
+    async fn edit_cell_payload_shape() {
+        // Edit returns harness_id, the new_version and the bumped lock_version.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_edit_cell(Parameters(tools::EditArgs {
+                harness_id: id.clone(),
+                cell_id: "c1".into(),
+                prompt: "updated".into(),
+                expected_lock_version: 0,
+            }))
+            .await
+            .expect("edit succeeds");
+        let p = payload(&result);
+        assert_eq!(p["harness_id"], serde_json::json!(id));
+        assert!(p["new_version"].is_number());
+        assert!(p["lock_version"].is_number());
+    }
 }

@@ -6,6 +6,11 @@ use crate::ports::id_clock::IdClock;
 use crate::ports::repository::HarnessRepository;
 use sha2::{Digest, Sha256};
 
+/// Computes the SHA-256 content hash of a board definition.
+///
+/// The hash is taken over the canonical serialized JSON and stored on each
+/// [`BoardVersion`] so identical definitions produce identical hashes,
+/// supporting integrity checks and deduplication.
 pub fn content_hash(def: &BoardDefinition) -> String {
     let json = serde_json::to_vec(def).expect("serialize board");
     let mut h = Sha256::new();
@@ -13,6 +18,10 @@ pub fn content_hash(def: &BoardDefinition) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// Builds the minimal default board used when no definition is supplied.
+///
+/// A single active, terminal `start` cell with an empty prompt — a valid board
+/// the agent can immediately edit and extend.
 pub fn default_board() -> BoardDefinition {
     BoardDefinition {
         schema_version: 1,
@@ -28,17 +37,29 @@ pub fn default_board() -> BoardDefinition {
     }
 }
 
+/// Input for [`create_harness`].
 pub struct CreateHarnessInput {
+    /// Name to assign the new harness.
     pub name: String,
+    /// Optional initial board; when `None`, [`default_board`] is used.
     pub definition: Option<BoardDefinition>,
 }
 
+/// Output of [`create_harness`].
 pub struct CreateHarnessOutput {
+    /// Id of the newly created harness.
     pub harness_id: String,
+    /// `version_no` of the initial board version (always 1).
     pub version_no: i64,
+    /// Initial optimistic-lock version (always 0).
     pub lock_version: i64,
 }
 
+/// Creates a harness with its initial board version (v1).
+///
+/// Uses the provided definition or [`default_board`] when omitted, derives
+/// `has_draft` from the definition's cells, and persists the harness head plus
+/// its first immutable [`BoardVersion`] in a single repository write.
 pub async fn create_harness(
     repo: &dyn HarnessRepository,
     clock: &dyn IdClock,
@@ -71,6 +92,7 @@ pub async fn create_harness(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::cell::{Cell, CellStatus};
     use crate::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
 
     #[tokio::test]
@@ -90,5 +112,74 @@ mod tests {
         assert_eq!(h.current_version, 1);
         assert_eq!(v.version_no, 1);
         assert_eq!(h.name, "h");
+    }
+
+    #[tokio::test]
+    async fn create_with_supplied_definition_persists_that_definition() {
+        // The Some(definition) path: the harness head must carry the supplied
+        // board verbatim rather than the default board.
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "intro".into(),
+                prompt: "hello".into(),
+                status: CellStatus::Active,
+                terminal: true,
+            }],
+            edges: vec![],
+        };
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: Some(def.clone()) },
+        )
+        .await
+        .unwrap();
+        let (h, v) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        assert!(!h.has_draft);
+        assert_eq!(v.definition, def);
+        assert_eq!(v.definition.cells[0].id, "c1");
+        assert_eq!(v.definition.cells[0].prompt, "hello");
+    }
+
+    #[tokio::test]
+    async fn create_with_draft_cell_sets_has_draft() {
+        // A definition containing a Draft cell must mark the harness has_draft.
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "c1".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "draftcell".into(),
+                    prompt: "".into(),
+                    status: CellStatus::Draft,
+                    terminal: false,
+                },
+            ],
+            edges: vec![],
+        };
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+        )
+        .await
+        .unwrap();
+        let (h, _v) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        assert!(h.has_draft);
     }
 }

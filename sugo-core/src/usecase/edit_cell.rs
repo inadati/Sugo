@@ -5,20 +5,38 @@ use crate::ports::id_clock::IdClock;
 use crate::ports::repository::HarnessRepository;
 use crate::usecase::create_harness::content_hash;
 
+/// Input for [`edit_cell`].
 pub struct EditCellInput {
+    /// Id of the harness to edit.
     pub harness_id: String,
+    /// Id of the cell whose prompt is replaced.
     pub cell_id: String,
+    /// New prompt text for the target cell.
     pub prompt: String,
+    /// Caller's expected `lock_version`; mismatch yields a lock conflict.
     pub expected_lock_version: i64,
 }
 
+/// Output of [`edit_cell`].
 #[derive(Debug)]
 pub struct EditCellOutput {
+    /// Id of the edited harness.
     pub harness_id: String,
+    /// `version_no` of the newly appended board version.
     pub new_version: i64,
+    /// New optimistic-lock version after the edit.
     pub lock_version: i64,
 }
 
+/// Edits a cell's prompt by appending a new immutable board version.
+///
+/// Board versions are immutable, so an edit never mutates the existing head:
+/// the head definition is cloned, the target cell's prompt is replaced, and the
+/// result is persisted as a fresh [`BoardVersion`] with `version_no + 1`. The
+/// harness `lock_version` is bumped to advance the optimistic lock — the caller
+/// must pass the current `lock_version` as `expected_lock_version`, and a
+/// concurrent edit that already advanced the lock is rejected as a conflict
+/// rather than silently overwriting another writer's version.
 pub async fn edit_cell(
     repo: &dyn HarnessRepository,
     clock: &dyn IdClock,

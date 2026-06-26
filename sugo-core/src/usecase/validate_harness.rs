@@ -2,6 +2,11 @@ use crate::error::CoreError;
 use crate::ports::repository::HarnessRepository;
 use crate::validate::{ValidationReport, validate_board};
 
+/// Runs structural validation over a harness's current board definition.
+///
+/// Loads the harness head and returns the [`ValidationReport`] produced by
+/// [`validate_board`], surfacing structural issues (with severities) for the
+/// caller; a missing harness yields [`CoreError::NotFound`].
 pub async fn validate_harness(
     repo: &dyn HarnessRepository,
     harness_id: &str,
@@ -46,7 +51,7 @@ mod tests {
 
     #[tokio::test]
     async fn validate_surfaces_error_issue_with_ok_false() {
-        // no_terminal を持つ盤面が usecase 経由で ok=false で表面化することを検証。
+        // Verify that a board with no_terminal surfaces as ok=false via the usecase.
         let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
         let def = BoardDefinition {

@@ -1,21 +1,51 @@
 use crate::domain::cell::CellStatus;
 use crate::error::CoreError;
 use crate::ports::repository::HarnessRepository;
+use std::collections::HashSet;
 
+/// A draft cell surfaced in [`HarnessStatus::draft_diff`].
+///
+/// Represents a cell that exists as a draft on the current board version but
+/// was not present on the most recent draft-free (fully active) baseline.
 pub struct DraftDiffEntry {
+    /// Id of the draft cell.
     pub cell_id: String,
+    /// Human-readable name of the draft cell.
     pub name: String,
 }
 
+/// Snapshot of a harness's current state plus its draft difference.
 pub struct HarnessStatus {
+    /// Id of the harness.
     pub harness_id: String,
+    /// Name of the harness.
     pub name: String,
+    /// `version_no` of the current head board version.
     pub current_version: i64,
+    /// Whether the current board version contains any draft cell.
     pub has_draft: bool,
+    /// Draft cells added relative to the last draft-free baseline version.
     pub draft_diff: Vec<DraftDiffEntry>,
+    /// Serialized current board definition JSON.
     pub definition_json: String,
 }
 
+/// Returns the current status of a harness, including its `draft_diff`.
+///
+/// The `draft_diff` is the set of draft cells added relative to the last
+/// *active* (draft-free) version, per the design's status semantics. Because
+/// `board_versions` carries no active/draft marker and `edit_cell` produces a
+/// new version even while drafts remain, the immediately preceding version is
+/// not necessarily active: a draft introduced in v1 and left untouched through
+/// an edit still lives in v2. Comparing v2 against v1 would wrongly drop such a
+/// draft from the diff, contradicting `has_draft`.
+///
+/// To stay consistent with `has_draft`, the baseline is the most recent
+/// version (scanning `version_no` downward from `current - 1` to 1) whose cells
+/// are *all* active. Its cell ids form the baseline set; current draft cells
+/// absent from that set are the diff. If no draft-free version exists, the
+/// baseline is empty and every current draft cell is reported — so any draft
+/// surviving across edits always appears in `draft_diff`.
 pub async fn get_status(
     repo: &dyn HarnessRepository,
     harness_id: &str,
@@ -25,30 +55,34 @@ pub async fn get_status(
         .await?
         .ok_or_else(|| CoreError::NotFound(harness_id.to_string()))?;
 
-    // draft_diff: 「active な前バージョンとの差分」。前バージョンに draft で存在
-    // しなかったが現バージョンで draft になっているマスを列挙する。v1（前バージョン
-    // 無し）なら現バージョンの draft セルをすべて追加扱いにする。
-    let prev_drafts: std::collections::HashSet<String> = if v.version_no > 1 {
-        match repo.get_version(harness_id, v.version_no - 1).await? {
-            Some(prev) => prev
+    // Find the most recent draft-free (fully active) baseline version by
+    // scanning version_no downward, and take its cell ids as the baseline set.
+    // If none exists the baseline is empty, so every current draft is "added".
+    let mut baseline_cells: HashSet<String> = HashSet::new();
+    let mut vno = v.version_no - 1;
+    while vno >= 1 {
+        if let Some(prev) = repo.get_version(harness_id, vno).await? {
+            let has_draft = prev
                 .definition
                 .cells
                 .iter()
-                .filter(|c| c.status == CellStatus::Draft)
-                .map(|c| c.id.clone())
-                .collect(),
-            None => std::collections::HashSet::new(),
+                .any(|c| c.status == CellStatus::Draft);
+            if !has_draft {
+                baseline_cells = prev.definition.cells.iter().map(|c| c.id.clone()).collect();
+                break;
+            }
         }
-    } else {
-        std::collections::HashSet::new()
-    };
+        vno -= 1;
+    }
 
+    // draft_diff: current draft cells whose ids are not present in the baseline
+    // (active prev version) cell set.
     let draft_diff = v
         .definition
         .cells
         .iter()
         .filter(|c| c.status == CellStatus::Draft)
-        .filter(|c| !prev_drafts.contains(&c.id))
+        .filter(|c| !baseline_cells.contains(&c.id))
         .map(|c| DraftDiffEntry { cell_id: c.id.clone(), name: c.name.clone() })
         .collect();
     let definition_json =
@@ -63,13 +97,19 @@ pub async fn get_status(
     })
 }
 
+/// Lightweight summary of a harness for listing purposes.
 pub struct HarnessSummary {
+    /// Id of the harness.
     pub harness_id: String,
+    /// Name of the harness.
     pub name: String,
+    /// `version_no` of the current head board version.
     pub current_version: i64,
+    /// Whether the current board version contains any draft cell.
     pub has_draft: bool,
 }
 
+/// Returns a summary for every harness known to the repository.
 pub async fn list_harness_summaries(
     repo: &dyn HarnessRepository,
 ) -> Result<Vec<HarnessSummary>, CoreError> {
@@ -91,6 +131,8 @@ mod tests {
     use crate::domain::board::BoardDefinition;
     use crate::domain::cell::{Cell, CellStatus};
     use crate::domain::edge::Edge;
+    use crate::domain::harness::BoardVersion;
+    use crate::ports::id_clock::IdClock;
     use crate::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
     use crate::usecase::create_harness::{CreateHarnessInput, create_harness};
     use crate::usecase::edit_cell::{EditCellInput, edit_cell};
@@ -142,10 +184,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn draft_diff_excludes_drafts_already_in_previous_version() {
-        // c2 が v1 から既に draft の盤面を作り、edit_cell で v2 を生成する。
-        // v2 の draft_diff は「前バージョンとの差分」のため、既存 draft の c2 を
-        // 含まない（新規追加された draft マスだけを差分とする）。
+    async fn draft_diff_includes_drafts_surviving_across_edits() {
+        // A board where c2 is a draft already in v1 (which is therefore never
+        // active), then edit_cell produces v2 with c2 still a draft. Because no
+        // draft-free baseline exists, c2 must remain listed in draft_diff so the
+        // diff stays consistent with has_draft.
         let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
         let def = BoardDefinition {
@@ -182,12 +225,12 @@ mod tests {
         .await
         .unwrap();
 
-        // v1 の draft_diff は c2 を追加扱い。
+        // v1: c2 is reported as an added draft (no baseline exists).
         let st1 = get_status(&repo, &out.harness_id).await.unwrap();
         assert_eq!(st1.draft_diff.len(), 1);
         assert_eq!(st1.draft_diff[0].cell_id, "c2");
 
-        // edit_cell で v2 を生成（c2 は引き続き draft のまま）。
+        // edit_cell produces v2 (c2 stays a draft).
         edit_cell(
             &repo,
             &clock,
@@ -201,11 +244,110 @@ mod tests {
         .await
         .unwrap();
 
-        // v2 では c2 が前バージョン(v1)でも既に draft だったので差分に出ない。
+        // v2: v1 was never active (it contained a draft), so there is no
+        // draft-free baseline and c2 must still appear in draft_diff,
+        // consistent with has_draft.
         let st2 = get_status(&repo, &out.harness_id).await.unwrap();
         assert_eq!(st2.current_version, 2);
         assert!(st2.has_draft);
-        assert!(st2.draft_diff.is_empty());
+        assert_eq!(st2.draft_diff.len(), 1);
+        assert_eq!(st2.draft_diff[0].cell_id, "c2");
+    }
+
+    #[tokio::test]
+    async fn draft_diff_only_lists_drafts_added_since_active_baseline() {
+        // Start from a fully-active v1 (draft-free baseline). Editing a cell
+        // produces an active v2 that is itself a baseline. Then introduce a new
+        // draft cell (c3) in v3; only c3 should appear in draft_diff, measured
+        // against the most recent active baseline (v2).
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "c1".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "c2".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                },
+            ],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "l".into(),
+                guard: None,
+            }],
+        };
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+        )
+        .await
+        .unwrap();
+
+        // v1 is draft-free: no draft_diff.
+        let st1 = get_status(&repo, &out.harness_id).await.unwrap();
+        assert!(!st1.has_draft);
+        assert!(st1.draft_diff.is_empty());
+
+        // edit_cell on c1 produces an active v2 (still draft-free).
+        edit_cell(
+            &repo,
+            &clock,
+            EditCellInput {
+                harness_id: out.harness_id.clone(),
+                cell_id: "c1".into(),
+                prompt: "edited".into(),
+                expected_lock_version: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Manually append v3 that introduces a single new draft cell c3,
+        // exercising the case where the active baseline is v2.
+        let (mut h, head) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        let mut def3 = head.definition.clone();
+        def3.cells.push(Cell {
+            id: "c3".into(),
+            name: "newdraft".into(),
+            prompt: "".into(),
+            status: CellStatus::Draft,
+            terminal: false,
+        });
+        let expected_lock = h.lock_version;
+        let new_version = BoardVersion {
+            id: clock.new_id(),
+            harness_id: h.id.clone(),
+            version_no: head.version_no + 1,
+            content_hash: "hash".into(),
+            definition: def3,
+            created_at: clock.now_iso(),
+        };
+        h.current_version = new_version.version_no;
+        h.lock_version += 1;
+        h.has_draft = true;
+        repo.append_version(&h, &new_version, expected_lock)
+            .await
+            .unwrap();
+
+        // v3: baseline is the most recent active version (v2). Only c3 is added.
+        let st3 = get_status(&repo, &out.harness_id).await.unwrap();
+        assert_eq!(st3.current_version, 3);
+        assert!(st3.has_draft);
+        assert_eq!(st3.draft_diff.len(), 1);
+        assert_eq!(st3.draft_diff[0].cell_id, "c3");
     }
 
     #[tokio::test]

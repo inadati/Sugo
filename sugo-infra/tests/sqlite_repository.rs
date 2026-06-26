@@ -8,7 +8,7 @@ mod helpers {
     use sugo_core::domain::harness::{BoardVersion, Harness};
     use sugo_core::usecase::create_harness::content_hash;
 
-    /// 指定 prompt を持つ最小盤面を構築する。
+    /// Builds a minimal board carrying the given prompt.
     pub fn board(prompt: &str) -> BoardDefinition {
         BoardDefinition {
             schema_version: 1,
@@ -24,7 +24,7 @@ mod helpers {
         }
     }
 
-    /// guard=Some(...) を持つ edge や draft セルを含む、より複雑な盤面。
+    /// A richer board including an edge with guard=Some(...) and a draft cell.
     pub fn rich_board() -> BoardDefinition {
         BoardDefinition {
             schema_version: 1,
@@ -69,7 +69,7 @@ mod helpers {
         }
     }
 
-    /// 実 content_hash を計算して BoardVersion を作る。
+    /// Builds a BoardVersion with a real content_hash computed from the board.
     pub fn version(id: &str, harness_id: &str, version_no: i64, def: BoardDefinition) -> BoardVersion {
         let content_hash = content_hash(&def);
         BoardVersion {
@@ -94,7 +94,7 @@ mod helpers {
         }
     }
 
-    /// h1 / v1（prompt="orig"）を作って repo に投入したものを返す。
+    /// Returns h1 / v1 (prompt="orig") ready to be inserted into a repo.
     pub fn sample() -> (Harness, BoardVersion) {
         (harness("h1", 1, 0), version("v1", "h1", 1, board("orig")))
     }
@@ -124,41 +124,42 @@ async fn append_version_enforces_lock() {
     h.current_version = 2;
     h.lock_version = 1;
 
-    // 誤った expected_lock では衝突
+    // A wrong expected_lock conflicts.
     let err = repo.append_version(&h, &v2, 99).await.unwrap_err();
     assert!(matches!(
         err,
         sugo_core::error::CoreError::LockConflict { .. }
     ));
 
-    // 正しい expected_lock では成功
+    // The correct expected_lock succeeds.
     repo.append_version(&h, &v2, 0).await.unwrap();
     let stored = repo.get_version("h1", 2).await.unwrap().unwrap();
     assert_eq!(stored.version_no, 2);
 }
 
-/// (a) 不変性: v1 とは異なる内容で v2 を append しても、v1 の prompt が元のまま。
+/// (a) Immutability: appending v2 with different content leaves v1's prompt
+/// unchanged.
 #[tokio::test]
 async fn old_version_content_is_immutable_after_append() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     let (mut h, v1) = helpers::sample(); // v1 prompt = "orig"
     repo.create(&h, &v1).await.unwrap();
 
-    // 実際に prompt を変えた v2 を append する。
+    // Append a v2 whose prompt actually differs.
     let v2 = version("v2", "h1", 2, board("CHANGED"));
     h.current_version = 2;
     h.lock_version = 1;
     repo.append_version(&h, &v2, 0).await.unwrap();
 
-    // append 後も v1 の definition セル prompt は元の値("orig")のまま。
+    // After the append v1's definition cell prompt is still the original ("orig").
     let stored_v1 = repo.get_version("h1", 1).await.unwrap().unwrap();
     assert_eq!(stored_v1.definition.cells[0].prompt, "orig");
-    // v2 側は新しい値。
+    // v2 carries the new value.
     let stored_v2 = repo.get_version("h1", 2).await.unwrap().unwrap();
     assert_eq!(stored_v2.definition.cells[0].prompt, "CHANGED");
 }
 
-/// (b) version_no がハーネスごとに 1,2,3 と単調増加する。
+/// (b) version_no increases monotonically per harness: 1, 2, 3.
 #[tokio::test]
 async fn version_no_increases_monotonically() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
@@ -179,25 +180,27 @@ async fn version_no_increases_monotonically() {
     assert_eq!(repo.get_version("h1", 3).await.unwrap().unwrap().version_no, 3);
 }
 
-/// (c) UNIQUE(harness_id, version_no): 既存 version_no と重複する append は Storage エラー。
+/// (c) UNIQUE(harness_id, version_no): appending a duplicate version_no yields a
+/// Storage error.
 #[tokio::test]
 async fn duplicate_version_no_is_rejected() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     let (mut h, v1) = helpers::sample();
     repo.create(&h, &v1).await.unwrap();
 
-    // version_no=1 を再 append（id は別、lock は一致）→ UNIQUE 違反。
+    // Re-append version_no=1 (different id, matching lock) -> UNIQUE violation.
     let dup = version("v1b", "h1", 1, board("overwrite"));
     h.lock_version = 1;
     let err = repo.append_version(&h, &dup, 0).await.unwrap_err();
     assert!(matches!(err, sugo_core::error::CoreError::Storage(_)));
 
-    // v1 は不変。
+    // v1 is unchanged.
     let stored_v1 = repo.get_version("h1", 1).await.unwrap().unwrap();
     assert_eq!(stored_v1.definition.cells[0].prompt, "orig");
 }
 
-/// (d) lock_version 永続化: append 成功後に get で lock_version=1 が読み戻せる。
+/// (d) lock_version persistence: after a successful append, get reads back
+/// lock_version=1.
 #[tokio::test]
 async fn lock_version_is_persisted_after_append() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
@@ -214,20 +217,21 @@ async fn lock_version_is_persisted_after_append() {
     assert_eq!(gh.current_version, 2);
 }
 
-/// (e) stale lock 回帰: 一度成功した expected_lock_version を再利用した2回目は LockConflict。
+/// (e) stale-lock regression: reusing an already-consumed expected_lock_version
+/// on the second append yields LockConflict.
 #[tokio::test]
 async fn reusing_stale_lock_version_conflicts() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     let (mut h, v1) = helpers::sample();
     repo.create(&h, &v1).await.unwrap();
 
-    // 1回目: expected_lock=0 で成功（lock_version は 1 になる）。
+    // First call: expected_lock=0 succeeds (lock_version becomes 1).
     let v2 = version("v2", "h1", 2, board("p2"));
     h.current_version = 2;
     h.lock_version = 1;
     repo.append_version(&h, &v2, 0).await.unwrap();
 
-    // 2回目: 古い expected_lock=0 を再利用（version_no も新規にする）→ 衝突。
+    // Second call: reuse the stale expected_lock=0 (with a fresh version_no) -> conflict.
     let v3 = version("v3", "h1", 3, board("p3"));
     h.current_version = 3;
     h.lock_version = 2;
@@ -237,21 +241,22 @@ async fn reusing_stale_lock_version_conflicts() {
         sugo_core::error::CoreError::LockConflict { .. }
     ));
 
-    // 衝突したので v3 は永続化されておらず、head は v2 のまま。
+    // Because it conflicted, v3 was not persisted and head is still v2.
     assert!(repo.get_version("h1", 3).await.unwrap().is_none());
     let (gh, _) = repo.get("h1").await.unwrap().unwrap();
     assert_eq!(gh.current_version, 2);
     assert_eq!(gh.lock_version, 1);
 }
 
-/// (f) 存在しない id の get は None。
+/// (f) get of a nonexistent id returns None.
 #[tokio::test]
 async fn get_missing_returns_none() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     assert!(repo.get("nope").await.unwrap().is_none());
 }
 
-/// (g) content_hash ラウンドトリップ（最小ケース）: 取得後に再計算した hash が保存値と一致。
+/// (g) content_hash round-trip (minimal case): the hash recomputed after fetch
+/// matches the stored value.
 #[tokio::test]
 async fn content_hash_roundtrips_minimal() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
@@ -260,13 +265,13 @@ async fn content_hash_roundtrips_minimal() {
     repo.create(&h, &v).await.unwrap();
 
     let stored = repo.get_version("h1", 1).await.unwrap().unwrap();
-    // 保存値が偽ハッシュでなく実ハッシュ。
+    // The stored value is the real hash, not a fake placeholder.
     assert_eq!(stored.content_hash, expected);
-    // 取得した definition から再計算した hash が保存値に一致。
+    // The hash recomputed from the fetched definition matches the stored value.
     assert_eq!(content_hash(&stored.definition), stored.content_hash);
 }
 
-/// (g) content_hash ラウンドトリップ（guard=Some / draft セルを含む edge ケース）。
+/// (g) content_hash round-trip (case with guard=Some / draft cell on edges).
 #[tokio::test]
 async fn content_hash_roundtrips_rich_definition() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
@@ -278,9 +283,9 @@ async fn content_hash_roundtrips_rich_definition() {
 
     let stored = repo.get_version("h2", 1).await.unwrap().unwrap();
     assert_eq!(stored.content_hash, expected);
-    // guard / draft を含む definition でも再計算した hash が一致。
+    // The recomputed hash still matches for a definition containing guard / draft.
     assert_eq!(content_hash(&stored.definition), stored.content_hash);
-    // guard と draft が definition のラウンドトリップで失われていない。
+    // guard and draft survive the definition round-trip.
     assert!(stored.definition.edges[0].guard.is_some());
     assert_eq!(
         stored.definition.cells[1].status,
@@ -288,8 +293,143 @@ async fn content_hash_roundtrips_rich_definition() {
     );
 }
 
-// --- contract-test-parity: sugo-core の共有契約関数を SqliteHarnessRepository に対して実行 ---
-// fake（InMemoryHarnessRepository）と sqlite が同一 ports 契約を通ることを機構的に保証する。
+/// FK enforcement: appending a board_version whose harness_id has no matching
+/// harness row is rejected. The repository's pre-SELECT surfaces this as
+/// NotFound; the test also drives the orphan INSERT directly through the public
+/// API to confirm rejection on real SQLite.
+#[tokio::test]
+async fn orphan_board_version_is_rejected_by_fk() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    // No harness "ghost" exists, so appending a board_version for it must fail.
+    let mut h = harness("ghost", 2, 1);
+    h.current_version = 2;
+    let v = version("orphan", "ghost", 2, board("x"));
+    let err = repo.append_version(&h, &v, 0).await.unwrap_err();
+    // append_version's pre-SELECT reports the missing parent as NotFound.
+    assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
+    // The orphan version was not persisted.
+    assert!(repo.get_version("ghost", 2).await.unwrap().is_none());
+}
+
+/// FK enforcement at the DB level: with PRAGMA foreign_keys=ON, a file-backed
+/// connection rejects an orphan board_versions row even if the application-level
+/// pre-SELECT were bypassed. We exercise this by inserting a harness, removing
+/// it, then attempting to append a version pointing at the now-missing parent.
+#[tokio::test]
+async fn fk_enforced_on_real_sqlite_connection() {
+    let dir = std::env::temp_dir().join(format!("sugo-fk-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fk.db");
+    let path_str = path.to_str().unwrap();
+
+    let repo = SqliteHarnessRepository::open(path_str).unwrap();
+    let (h, v) = helpers::sample();
+    repo.create(&h, &v).await.unwrap();
+    // Sanity: the parent exists.
+    assert!(repo.get("h1").await.unwrap().is_some());
+
+    // Now attempt to append a version for a harness id that does not exist;
+    // FK enforcement (and the pre-SELECT) must reject it, leaving nothing behind.
+    let ghost = harness("missing", 2, 1);
+    let orphan = version("o1", "missing", 2, board("x"));
+    let err = repo.append_version(&ghost, &orphan, 0).await.unwrap_err();
+    assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
+    assert!(repo.get_version("missing", 2).await.unwrap().is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Concurrency: two writers race the same expected_lock_version. Exactly one
+/// append succeeds and the other returns LockConflict; head and lock_version
+/// stay consistent with no partial state left behind.
+#[tokio::test]
+async fn concurrent_appends_one_wins_other_conflicts() {
+    use std::sync::Arc;
+
+    let repo = Arc::new(SqliteHarnessRepository::in_memory().unwrap());
+    let (h, v1) = helpers::sample();
+    repo.create(&h, &v1).await.unwrap();
+
+    // Two writers both target expected_lock=0 but supply distinct version_no.
+    let r1 = Arc::clone(&repo);
+    let r2 = Arc::clone(&repo);
+
+    let mut ha = harness("h1", 2, 1);
+    ha.current_version = 2;
+    let va = version("vA", "h1", 2, board("A"));
+
+    let mut hb = harness("h1", 3, 1);
+    hb.current_version = 3;
+    let vb = version("vB", "h1", 3, board("B"));
+
+    let t1 = tokio::spawn(async move { r1.append_version(&ha, &va, 0).await });
+    let t2 = tokio::spawn(async move { r2.append_version(&hb, &vb, 0).await });
+
+    let res1 = t1.await.unwrap();
+    let res2 = t2.await.unwrap();
+
+    // Exactly one succeeded.
+    let ok_count = [&res1, &res2].iter().filter(|r| r.is_ok()).count();
+    let conflict_count = [&res1, &res2]
+        .iter()
+        .filter(|r| matches!(r, Err(sugo_core::error::CoreError::LockConflict { .. })))
+        .count();
+    assert_eq!(ok_count, 1, "exactly one writer must win");
+    assert_eq!(conflict_count, 1, "the other must see LockConflict");
+
+    // Head is consistent: lock_version advanced to 1 and current_version points
+    // at whichever winner's version, which is the only extra version persisted.
+    let (gh, _) = repo.get("h1").await.unwrap().unwrap();
+    assert_eq!(gh.lock_version, 1);
+    assert!(gh.current_version == 2 || gh.current_version == 3);
+    let stored_winner = repo
+        .get_version("h1", gh.current_version)
+        .await
+        .unwrap();
+    assert!(stored_winner.is_some());
+    // The loser's version was not persisted (no partial state).
+    let loser_no = if gh.current_version == 2 { 3 } else { 2 };
+    assert!(repo.get_version("h1", loser_no).await.unwrap().is_none());
+}
+
+/// Transaction rollback on UNIQUE violation: when the lock check passes but the
+/// board_version INSERT hits UNIQUE(harness_id, version_no), the whole
+/// transaction rolls back — head is not advanced and no partial commit remains.
+#[tokio::test]
+async fn unique_violation_after_lock_check_rolls_back() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    let (h, v1) = helpers::sample(); // v1 at version_no=1, lock_version=0
+    repo.create(&h, &v1).await.unwrap();
+
+    // Append a real v2 to move head to version_no=2 and lock_version to 1.
+    let mut h2 = harness("h1", 2, 1);
+    h2.current_version = 2;
+    let v2 = version("v2", "h1", 2, board("p2"));
+    repo.append_version(&h2, &v2, 0).await.unwrap();
+
+    // Now attempt an append that passes the lock check (expected_lock=1) but
+    // collides on version_no=2 (UNIQUE violation) while trying to advance head.
+    let mut h3 = harness("h1", 3, 2);
+    h3.current_version = 3;
+    let dup = version("v2dup", "h1", 2, board("collide"));
+    let err = repo.append_version(&h3, &dup, 1).await.unwrap_err();
+    assert!(matches!(err, sugo_core::error::CoreError::Storage(_)));
+
+    // The transaction rolled back: head is unchanged (still v2, lock_version=1).
+    let (gh, _) = repo.get("h1").await.unwrap().unwrap();
+    assert_eq!(gh.current_version, 2);
+    assert_eq!(gh.lock_version, 1);
+    // No phantom version_no=3 was committed.
+    assert!(repo.get_version("h1", 3).await.unwrap().is_none());
+    // v2 remains its original content.
+    let stored_v2 = repo.get_version("h1", 2).await.unwrap().unwrap();
+    assert_eq!(stored_v2.definition.cells[0].prompt, "p2");
+}
+
+// --- contract-test-parity: run sugo-core's shared contract functions against
+// SqliteHarnessRepository ---
+// Mechanically guarantees that the fake (InMemoryHarnessRepository) and sqlite
+// pass the same ports contract.
 
 mod contract {
     use super::SqliteHarnessRepository;

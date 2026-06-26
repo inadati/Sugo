@@ -1,13 +1,16 @@
-// 共有契約テスト。fake（InMemoryHarnessRepository）と sqlite
-// （SqliteHarnessRepository）の両実装が同一の `HarnessRepository` ports 契約を
-// 満たすことを、同一のアサーション本体で検証するためのモジュール。
+// Shared contract tests. This module verifies that both implementations of the
+// `HarnessRepository` port -- the fake (InMemoryHarnessRepository) and the
+// sqlite-backed SqliteHarnessRepository -- satisfy the same contract using a
+// single set of assertion bodies.
 //
-// 各 `contract_*` 関数は `HarnessRepository` を受け取り、get/create/list/
-// get_version/append_version の意味論（NotFound / LockConflict / 不変性 /
-// 重複拒否）を assert する。core 側は InMemoryHarnessRepository に対して、
-// sugo-infra 側は SqliteHarnessRepository に対して同じ関数を実行する。
+// Each `contract_*` function takes a `HarnessRepository` and asserts the
+// semantics of get/create/list/get_version/append_version (NotFound /
+// LockConflict / immutability / duplicate rejection). The core side runs them
+// against InMemoryHarnessRepository; sugo-infra runs the same functions against
+// SqliteHarnessRepository.
 //
-// 外部クレートから呼べるよう pub かつ `test-support` feature でゲートしている。
+// The functions are `pub` and gated behind the `test-support` feature so they
+// can be called from external crates.
 
 use crate::domain::board::BoardDefinition;
 use crate::domain::cell::{Cell, CellStatus};
@@ -69,7 +72,7 @@ fn version(id: &str, harness_id: &str, version_no: i64, def: BoardDefinition) ->
     }
 }
 
-/// create → get で同一内容が取得できること。
+/// create then get returns the same content.
 pub async fn contract_create_get<R: HarnessRepository>(repo: &R, _clock: &dyn IdClock) {
     let h = harness("h1", "first", 1, 0);
     let v = version("v1", "h1", 1, sample_board("p1"));
@@ -83,13 +86,13 @@ pub async fn contract_create_get<R: HarnessRepository>(repo: &R, _clock: &dyn Id
     assert_eq!(got_v.definition.cells[0].prompt, "p1");
 }
 
-/// 存在しない id の get は None を返すこと。
+/// get of a non-existent id returns None.
 pub async fn contract_get_missing_returns_none<R: HarnessRepository>(repo: &R) {
     assert!(repo.get("nope").await.expect("get ok").is_none());
 }
 
-/// append_version が旧バージョンを書き換えず新バージョンを追加し、
-/// 旧バージョンの内容が不変であること。
+/// append_version adds a new version without rewriting the old one, and the
+/// old version's content stays immutable.
 pub async fn contract_append_creates_immutable_version<R: HarnessRepository>(repo: &R) {
     let h = harness("h1", "first", 1, 0);
     let v1 = version("v1", "h1", 1, sample_board("original"));
@@ -101,7 +104,7 @@ pub async fn contract_append_creates_immutable_version<R: HarnessRepository>(rep
     let v2 = version("v2", "h1", 2, sample_board("changed"));
     repo.append_version(&h2, &v2, 0).await.expect("append ok");
 
-    // 旧バージョン v1 の内容が元のまま。
+    // Old version v1 keeps its original content.
     let got_v1 = repo
         .get_version("h1", 1)
         .await
@@ -109,14 +112,14 @@ pub async fn contract_append_creates_immutable_version<R: HarnessRepository>(rep
         .expect("v1 present");
     assert_eq!(got_v1.definition.cells[0].prompt, "original");
 
-    // head が v2 へ更新され lock_version も永続化されている。
+    // head moved to v2 and lock_version was persisted.
     let (got_h, got_v2) = repo.get("h1").await.expect("get ok").expect("present");
     assert_eq!(got_h.current_version, 2);
     assert_eq!(got_h.lock_version, 1);
     assert_eq!(got_v2.definition.cells[0].prompt, "changed");
 }
 
-/// expected_lock 不一致で append すると LockConflict になること。
+/// appending with a mismatched expected_lock yields LockConflict.
 pub async fn contract_lock_conflict<R: HarnessRepository>(repo: &R) {
     let h = harness("h1", "first", 1, 0);
     let v1 = version("v1", "h1", 1, sample_board("p1"));
@@ -133,7 +136,7 @@ pub async fn contract_lock_conflict<R: HarnessRepository>(repo: &R) {
     assert!(matches!(err, CoreError::LockConflict { .. }));
 }
 
-/// 存在しない harness への append は NotFound になること。
+/// appending to a non-existent harness yields NotFound.
 pub async fn contract_append_to_missing_harness_is_not_found<R: HarnessRepository>(repo: &R) {
     let h = harness("ghost", "x", 2, 1);
     let v = version("v2", "ghost", 2, sample_board("p"));
@@ -144,7 +147,7 @@ pub async fn contract_append_to_missing_harness_is_not_found<R: HarnessRepositor
     assert!(matches!(err, CoreError::NotFound(_)));
 }
 
-/// 重複 id の create は黙って上書きせず Err になること。
+/// create with a duplicate id returns Err instead of silently overwriting.
 pub async fn contract_duplicate_id_rejected<R: HarnessRepository>(repo: &R) {
     let h = harness("h1", "first", 1, 0);
     let v = version("v1", "h1", 1, sample_board("p1"));
@@ -154,24 +157,26 @@ pub async fn contract_duplicate_id_rejected<R: HarnessRepository>(repo: &R) {
     let dup_v = version("v9", "h1", 1, sample_board("other"));
     assert!(repo.create(&dup_h, &dup_v).await.is_err());
 
-    // 元の内容が保持されている（黙った上書きが起きていない）。
+    // Original content is preserved (no silent overwrite happened).
     let (got_h, _) = repo.get("h1").await.expect("get ok").expect("present");
     assert_eq!(got_h.name, "first");
 }
 
-/// 重複 version_no の append は黙って上書きせず Err になること（不変性強制）。
+/// append with a duplicate version_no returns Err instead of silently
+/// overwriting (immutability enforcement).
 pub async fn contract_duplicate_version_no_rejected<R: HarnessRepository>(repo: &R) {
     let h = harness("h1", "first", 1, 0);
     let v1 = version("v1", "h1", 1, sample_board("original"));
     repo.create(&h, &v1).await.expect("create ok");
 
-    // version_no=1 を再 append（lock は一致させる）→ UNIQUE 違反相当。
+    // Re-append version_no=1 (with a matching lock) -> equivalent to a UNIQUE
+    // violation.
     let mut h2 = h.clone();
     h2.lock_version = 1;
     let dup_v = version("v1b", "h1", 1, sample_board("overwrite"));
     assert!(repo.append_version(&h2, &dup_v, 0).await.is_err());
 
-    // v1 の内容が不変。
+    // v1's content is immutable.
     let got_v1 = repo
         .get_version("h1", 1)
         .await
@@ -180,7 +185,7 @@ pub async fn contract_duplicate_version_no_rejected<R: HarnessRepository>(repo: 
     assert_eq!(got_v1.definition.cells[0].prompt, "original");
 }
 
-/// list が登録済みハーネスを返すこと。
+/// list returns previously created harnesses.
 pub async fn contract_list_returns_created<R: HarnessRepository>(repo: &R) {
     let h = harness("h1", "first", 1, 0);
     let v = version("v1", "h1", 1, sample_board("p1"));

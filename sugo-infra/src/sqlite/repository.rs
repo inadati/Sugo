@@ -7,26 +7,73 @@ use sugo_core::domain::harness::{BoardVersion, Harness};
 use sugo_core::error::CoreError;
 use sugo_core::ports::repository::HarnessRepository;
 
+/// SQLite-backed [`HarnessRepository`].
+///
+/// Persists harness heads (`harnesses`) and immutable board-version snapshots
+/// (`board_versions`), preserving per-harness monotonic `version_no` and
+/// enforcing optimistic locking on edits. The single owned [`Connection`] is
+/// guarded by a [`Mutex`]; each access recovers from poisoning so a panic while
+/// the lock is held does not permanently brick the repository.
+///
+/// On construction the connection enables `PRAGMA foreign_keys = ON` (so the
+/// `board_versions.harness_id` foreign key is enforced) and a `busy_timeout`,
+/// and file-backed connections additionally switch to WAL journaling to support
+/// the DB-as-authority multi-process coordination of the design.
 pub struct SqliteHarnessRepository {
     conn: Mutex<Connection>,
 }
 
 impl SqliteHarnessRepository {
+    /// Opens (creating if absent) a file-backed repository at `path`.
+    ///
+    /// Applies the schema, enables foreign-key enforcement and a busy timeout,
+    /// and switches the database to WAL journaling for concurrent access.
     pub fn open(path: &str) -> Result<Self, CoreError> {
         let conn = Connection::open(path).map_err(map_err)?;
-        Self::init(conn)
+        Self::init(conn, true)
     }
 
+    /// Opens an ephemeral in-memory repository.
+    ///
+    /// Applies the schema, enables foreign-key enforcement and a busy timeout.
+    /// WAL journaling is not applied because it is meaningless for `:memory:`
+    /// databases. Primarily intended for tests.
     pub fn in_memory() -> Result<Self, CoreError> {
         let conn = Connection::open_in_memory().map_err(map_err)?;
-        Self::init(conn)
+        Self::init(conn, false)
     }
 
-    fn init(conn: Connection) -> Result<Self, CoreError> {
+    fn init(conn: Connection, file_backed: bool) -> Result<Self, CoreError> {
+        // Enforce foreign keys for this connection. SQLite leaves FK
+        // enforcement off by default, so without this the
+        // board_versions.harness_id REFERENCES clause is purely advisory.
+        conn.pragma_update(None, "foreign_keys", true)
+            .map_err(map_err)?;
+        // Wait (with retry) instead of failing immediately on SQLITE_BUSY, so
+        // that the DB-as-authority multi-process coordination can make progress
+        // under contention rather than erroring out.
+        conn.pragma_update(None, "busy_timeout", 5000)
+            .map_err(map_err)?;
+        if file_backed {
+            // WAL improves reader/writer concurrency for file-backed databases.
+            // It is meaningless for :memory: connections (they stay "memory"),
+            // so it is only attempted here.
+            conn.pragma_update(None, "journal_mode", "WAL")
+                .map_err(map_err)?;
+        }
         conn.execute_batch(SCHEMA).map_err(map_err)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Locks the connection, recovering from a poisoned mutex.
+    ///
+    /// If a previous holder panicked while the lock was held the mutex is
+    /// poisoned; we take the inner guard anyway rather than propagating the
+    /// panic, so a single failed operation does not brick every later call.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -37,9 +84,9 @@ fn map_err(e: rusqlite::Error) -> CoreError {
 #[async_trait]
 impl HarnessRepository for SqliteHarnessRepository {
     async fn create(&self, harness: &Harness, version: &BoardVersion) -> Result<(), CoreError> {
-        let mut conn = self.conn.lock().unwrap();
-        // INSERT harnesses + INSERT board_version を1トランザクションにまとめ、
-        // 途中失敗時に部分コミットを残さない（rollback）。
+        let mut conn = self.lock();
+        // Wrap INSERT harnesses + INSERT board_version in one transaction so a
+        // mid-way failure leaves no partial commit (rolled back).
         let tx = conn.transaction().map_err(map_err)?;
         insert_harness(&tx, harness)?;
         insert_version(&tx, version)?;
@@ -48,7 +95,7 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     async fn get(&self, id: &str) -> Result<Option<(Harness, BoardVersion)>, CoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock();
         let harness = select_harness(&conn, id)?;
         match harness {
             None => Ok(None),
@@ -61,7 +108,7 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     async fn list(&self) -> Result<Vec<Harness>, CoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock();
         let mut stmt = conn
             .prepare(
                 "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses",
@@ -80,7 +127,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         harness_id: &str,
         version_no: i64,
     ) -> Result<Option<BoardVersion>, CoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock();
         select_version(&conn, harness_id, version_no)
     }
 
@@ -90,13 +137,15 @@ impl HarnessRepository for SqliteHarnessRepository {
         version: &BoardVersion,
         expected_lock: i64,
     ) -> Result<(), CoreError> {
-        let mut conn = self.conn.lock().unwrap();
-        // 「lock_version 読取 → 比較 → INSERT board_version → UPDATE harnesses」を
-        // 1トランザクションにまとめる。途中失敗時は commit せず rollback され、
-        // board_version だけ残る不整合を防ぐ。
+        let mut conn = self.lock();
+        // Wrap "read lock_version -> compare -> INSERT board_version ->
+        // UPDATE harnesses" in one transaction. A mid-way failure is rolled
+        // back instead of committed, preventing an inconsistency where only the
+        // board_version is left behind.
         let tx = conn.transaction().map_err(map_err)?;
 
-        // 事前 SELECT で NotFound / LockConflict を区別して返す。
+        // Pre-SELECT lets us distinguish NotFound from LockConflict in the
+        // returned error.
         let current = select_harness(&tx, &harness.id)?
             .ok_or_else(|| CoreError::NotFound(harness.id.clone()))?;
         if current.lock_version != expected_lock {
@@ -106,11 +155,13 @@ impl HarnessRepository for SqliteHarnessRepository {
             });
         }
 
-        // 不変 board_version を追加（UNIQUE(harness_id, version_no) で重複拒否）。
+        // Append the immutable board_version; UNIQUE(harness_id, version_no)
+        // rejects duplicates.
         insert_version(&tx, version)?;
 
-        // CAS ガード付き UPDATE。WHERE id=? AND lock_version=?expected により
-        // DBレベルで原子的に更新し、0 行更新（= 期待ロック不一致）なら LockConflict。
+        // CAS-guarded UPDATE. The WHERE id=? AND lock_version=?expected clause
+        // updates atomically at the DB level; zero rows affected (i.e. the
+        // expected lock no longer matches) maps to LockConflict.
         let affected = tx
             .execute(
                 "UPDATE harnesses SET current_version=?1, has_draft=?2, lock_version=?3, updated_at=?4 WHERE id=?5 AND lock_version=?6",

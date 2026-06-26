@@ -1,3 +1,12 @@
+/// DDL applied at repository initialization.
+///
+/// Creates the two P1 tables: `harnesses` (head pointer plus optimistic-lock
+/// counter) and `board_versions` (immutable definition snapshots). The
+/// `board_versions.harness_id` foreign key is enforced only when the connection
+/// has `PRAGMA foreign_keys = ON`, which the repository sets on open; see
+/// [`crate::sqlite::SqliteHarnessRepository`]. The `UNIQUE(harness_id,
+/// version_no)` constraint guarantees board-version immutability by rejecting
+/// silent overwrites of an existing version number.
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS harnesses (
   id              TEXT PRIMARY KEY,

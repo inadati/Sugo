@@ -1,18 +1,50 @@
+//! Output port for harness persistence.
+//!
+//! Defines the [`HarnessRepository`] trait that the core depends on to store and
+//! retrieve harnesses and their immutable board versions. Concrete adapters
+//! (in-memory fake here, SQLite in `sugo-infra`) implement this trait and must
+//! satisfy the shared contract in [`crate::contract`].
+
 use crate::domain::harness::{BoardVersion, Harness};
 use crate::error::CoreError;
 use async_trait::async_trait;
 
+/// Persistence contract for harnesses and their immutable board versions.
+///
+/// Implementations must enforce that board versions are append-only (existing
+/// versions are never overwritten) and that head updates use optimistic
+/// locking. The same behaviour is exercised against every implementation via
+/// the shared contract tests in [`crate::contract`].
 #[async_trait]
 pub trait HarnessRepository: Send + Sync {
+    /// Insert a new harness together with its initial board version.
+    ///
+    /// Returns `Err(CoreError::Storage)` if a harness with the same id, or a
+    /// `(harness_id, version_no)` pair, already exists (no silent overwrite).
     async fn create(&self, harness: &Harness, version: &BoardVersion) -> Result<(), CoreError>;
+    /// Fetch a harness and its current head board version.
+    ///
+    /// Returns `Ok(None)` when no harness with `id` exists. Only the head
+    /// version is returned; use [`HarnessRepository::get_version`] for older
+    /// versions.
     async fn get(&self, id: &str) -> Result<Option<(Harness, BoardVersion)>, CoreError>;
+    /// List all stored harnesses (head metadata only, in unspecified order).
     async fn list(&self) -> Result<Vec<Harness>, CoreError>;
+    /// Fetch a specific historical board version by `version_no`.
+    ///
+    /// Returns `Ok(None)` when no such version exists for the harness.
     async fn get_version(
         &self,
         harness_id: &str,
         version_no: i64,
     ) -> Result<Option<BoardVersion>, CoreError>;
-    /// head を更新しつつ新 board_version を追加。expected_lock 不一致なら LockConflict。
+    /// Append a new immutable board version and move the harness head to it.
+    ///
+    /// Uses optimistic locking: `expected_lock` must equal the harness's
+    /// current `lock_version`, otherwise `Err(CoreError::LockConflict)` is
+    /// returned and nothing is written. Returns `Err(CoreError::NotFound)` if
+    /// the harness does not exist, and `Err(CoreError::Storage)` if the new
+    /// `version_no` would overwrite an existing version.
     async fn append_version(
         &self,
         harness: &Harness,
@@ -71,7 +103,8 @@ pub mod fake {
             version: &BoardVersion,
         ) -> Result<(), CoreError> {
             let mut hs = self.harnesses.lock().unwrap();
-            // sqlite の id PRIMARY KEY と同様、重複 id は黙って上書きせず拒否する。
+            // Like sqlite's id PRIMARY KEY, reject a duplicate id instead of
+            // silently overwriting.
             if hs.contains_key(&harness.id) {
                 return Err(CoreError::Storage(format!(
                     "duplicate harness id: {}",
@@ -80,7 +113,8 @@ pub mod fake {
             }
             let mut vs = self.versions.lock().unwrap();
             let vkey = (version.harness_id.clone(), version.version_no);
-            // sqlite の UNIQUE(harness_id, version_no) と同様、重複バージョンは拒否する。
+            // Like sqlite's UNIQUE(harness_id, version_no), reject a duplicate
+            // version.
             if vs.contains_key(&vkey) {
                 return Err(CoreError::Storage(format!(
                     "duplicate version_no {} for harness {}",
@@ -140,8 +174,9 @@ pub mod fake {
             }
             let mut vs = self.versions.lock().unwrap();
             let vkey = (version.harness_id.clone(), version.version_no);
-            // sqlite の UNIQUE(harness_id, version_no) と同様、重複バージョンの
-            // 黙った上書き（board_version 不変性の破壊）を拒否する。
+            // Like sqlite's UNIQUE(harness_id, version_no), reject a silent
+            // overwrite of an existing version (which would break board_version
+            // immutability).
             if vs.contains_key(&vkey) {
                 return Err(CoreError::Storage(format!(
                     "duplicate version_no {} for harness {}",
