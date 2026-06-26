@@ -1,0 +1,14 @@
+[package]
+name = "sugo-infra"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sugo-core = { path = "../sugo-core" }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+sugo-core = { path = "../sugo-core", features = ["test-support"] }
