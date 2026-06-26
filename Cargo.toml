@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sugo-core", "sugo-infra"]
+members = ["sugo-core", "sugo-infra", "sugo-mcp"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
