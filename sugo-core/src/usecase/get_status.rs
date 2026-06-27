@@ -1,3 +1,9 @@
+//! Use case for reporting a harness's status, including its draft diff.
+//!
+//! Compares the current board version against the most recent draft-free
+//! baseline to surface which draft cells were added, producing the
+//! [`HarnessStatus`] (with [`DraftDiffEntry`] entries) consumed by callers.
+
 use crate::domain::cell::CellStatus;
 use crate::error::CoreError;
 use crate::ports::repository::HarnessRepository;
@@ -171,7 +177,7 @@ mod tests {
         .unwrap();
         let st = get_status(&repo, &out.harness_id).await.unwrap();
         assert!(st.has_draft);
-        // v1（前バージョン無し）では現バージョンの draft セルが全て追加扱い。
+        // At v1 (no previous version) every draft cell on the current version counts as added.
         assert_eq!(st.draft_diff.len(), 1);
         assert_eq!(st.draft_diff[0].cell_id, "c2");
     }

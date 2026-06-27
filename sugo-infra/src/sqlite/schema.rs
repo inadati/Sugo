@@ -1,3 +1,9 @@
+//! SQLite schema (DDL) for the P1 harness store.
+//!
+//! Holds the single [`SCHEMA`] constant applied once at repository
+//! initialization. Kept separate from the repository logic so the table shapes
+//! and constraints can be read in one place.
+
 /// DDL applied at repository initialization.
 ///
 /// Creates the two P1 tables: `harnesses` (head pointer plus optimistic-lock

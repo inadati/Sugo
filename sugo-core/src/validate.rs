@@ -1,3 +1,10 @@
+//! Structural validation of board definitions.
+//!
+//! Provides [`validate_board`] and its [`ValidationReport`]/[`Severity`] types,
+//! which inspect a [`BoardDefinition`] for structural problems (missing
+//! start/terminal cells, unreachable cells, dangling edges, etc.) so callers can
+//! reject or surface invalid harnesses before they are run.
+
 use crate::domain::board::BoardDefinition;
 use crate::domain::cell::CellStatus;
 use serde::{Deserialize, Serialize};

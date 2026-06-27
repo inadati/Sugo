@@ -1,3 +1,9 @@
+//! Use case for validating a stored harness's current board.
+//!
+//! Loads the harness head and runs [`validate_board`] over its board
+//! definition, returning the resulting [`ValidationReport`] so callers can
+//! detect structural problems without mutating any state.
+
 use crate::error::CoreError;
 use crate::ports::repository::HarnessRepository;
 use crate::validate::{ValidationReport, validate_board};
@@ -39,7 +45,7 @@ mod tests {
         .await
         .unwrap();
         let report = validate_harness(&repo, &out.harness_id).await.unwrap();
-        assert!(report.ok); // default_board は active+terminal で妥当
+        assert!(report.ok); // default_board is valid: active + terminal
     }
 
     #[tokio::test]
@@ -62,7 +68,7 @@ mod tests {
                 name: "c1".into(),
                 prompt: "p".into(),
                 status: CellStatus::Active,
-                terminal: false, // terminal が無い → no_terminal (error)
+                terminal: false, // no terminal -> no_terminal (error)
             }],
             edges: vec![],
         };

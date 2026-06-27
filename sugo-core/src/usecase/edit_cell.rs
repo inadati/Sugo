@@ -1,3 +1,9 @@
+//! Use case for editing a single cell on a harness's current board.
+//!
+//! Applies an in-place cell change by appending a new immutable board version
+//! (old versions stay untouched) under optimistic locking, keeping the harness
+//! head pointed at the latest definition.
+
 use crate::domain::cell::CellStatus;
 use crate::domain::harness::BoardVersion;
 use crate::error::CoreError;
@@ -124,7 +130,7 @@ mod tests {
         .unwrap();
         assert_eq!(out.new_version, 2);
         assert_eq!(out.lock_version, 1);
-        // 旧バージョンは不変
+        // Old versions are immutable.
         let v1 = repo.get_version(&id, 1).await.unwrap().unwrap();
         assert_eq!(v1.definition.cells[0].prompt, "");
         let v2 = repo.get_version(&id, 2).await.unwrap().unwrap();

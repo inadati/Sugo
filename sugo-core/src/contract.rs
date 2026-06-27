@@ -1,16 +1,18 @@
-// Shared contract tests. This module verifies that both implementations of the
-// `HarnessRepository` port -- the fake (InMemoryHarnessRepository) and the
-// sqlite-backed SqliteHarnessRepository -- satisfy the same contract using a
-// single set of assertion bodies.
-//
-// Each `contract_*` function takes a `HarnessRepository` and asserts the
-// semantics of get/create/list/get_version/append_version (NotFound /
-// LockConflict / immutability / duplicate rejection). The core side runs them
-// against InMemoryHarnessRepository; sugo-infra runs the same functions against
-// SqliteHarnessRepository.
-//
-// The functions are `pub` and gated behind the `test-support` feature so they
-// can be called from external crates.
+//! Shared contract tests for the [`HarnessRepository`] port.
+//!
+//! This module verifies that both implementations of the port -- the fake
+//! (`InMemoryHarnessRepository`) and the sqlite-backed
+//! `SqliteHarnessRepository` -- satisfy the same contract using a single set of
+//! assertion bodies.
+//!
+//! Each `contract_*` function takes a `HarnessRepository` and asserts the
+//! semantics of get/create/list/get_version/append_version (NotFound /
+//! LockConflict / immutability / duplicate rejection). The core side runs them
+//! against `InMemoryHarnessRepository`; sugo-infra runs the same functions
+//! against `SqliteHarnessRepository`.
+//!
+//! The functions are `pub` and gated behind the `test-support` feature so they
+//! can be called from external crates.
 
 use crate::domain::board::BoardDefinition;
 use crate::domain::cell::{Cell, CellStatus};

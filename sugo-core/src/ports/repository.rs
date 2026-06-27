@@ -55,16 +55,29 @@ pub trait HarnessRepository: Send + Sync {
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake {
+    //! Deterministic in-memory fakes for the persistence and id/clock ports.
+    //!
+    //! Gated behind `cfg(any(test, feature = "test-support"))`, this module
+    //! provides [`FakeIdClock`] and [`InMemoryHarnessRepository`] -- in-memory
+    //! implementations used by core unit tests and, via the `test-support`
+    //! feature, re-exported so `sugo-infra`'s cross-crate tests can exercise the
+    //! shared contract against the same reference behaviour (they name these
+    //! types directly).
     use super::*;
     use crate::ports::id_clock::IdClock;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    /// Deterministic [`IdClock`] for tests: ids count up (`id-0`, `id-1`, ...)
+    /// and the clock returns a fixed timestamp.
+    ///
+    /// Named directly by `sugo-infra`'s tests via the `test-support` feature.
     pub struct FakeIdClock {
         counter: AtomicU64,
     }
     impl FakeIdClock {
+        /// Create a `FakeIdClock` whose id counter starts at zero.
         pub fn new() -> Self {
             Self { counter: AtomicU64::new(0) }
         }
@@ -84,12 +97,19 @@ pub mod fake {
         }
     }
 
+    /// In-memory [`HarnessRepository`] backing the shared contract tests.
+    ///
+    /// Stores harnesses and their board versions in `Mutex`-guarded maps,
+    /// mirroring the sqlite adapter's invariants (duplicate-id/version rejection,
+    /// optimistic locking, version immutability) so both implementations can be
+    /// driven by the same contract assertions.
     #[derive(Default)]
     pub struct InMemoryHarnessRepository {
         harnesses: Mutex<HashMap<String, Harness>>,
         versions: Mutex<HashMap<(String, i64), BoardVersion>>,
     }
     impl InMemoryHarnessRepository {
+        /// Create an empty in-memory repository.
         pub fn new() -> Self {
             Self::default()
         }

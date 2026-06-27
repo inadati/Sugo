@@ -1,3 +1,9 @@
+//! Use case for creating a new harness from a board definition.
+//!
+//! Validates and persists the initial board version (version 1) and exposes
+//! [`content_hash`], the canonical board-definition hashing used to stamp every
+//! [`BoardVersion`] for integrity and deduplication.
+
 use crate::domain::board::BoardDefinition;
 use crate::domain::cell::{Cell, CellStatus};
 use crate::domain::harness::{BoardVersion, Harness};
