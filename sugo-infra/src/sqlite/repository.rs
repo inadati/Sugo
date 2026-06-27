@@ -338,9 +338,33 @@ mod tests {
         }
     }
 
-    /// A fresh temp directory unique to this process and `tag`.
+    /// A fresh temp directory unique to this process, `tag`, *and* this call.
+    ///
+    /// The name combines the PID, a wall-clock nanosecond stamp, and a
+    /// process-wide monotonic counter (`sugo-{tag}-{pid}-{nanos}-{counter}`).
+    /// The PID alone is not enough: PIDs are reused (CI wrappers, macOS), so a
+    /// prior run that panicked/aborted before its best-effort `remove_dir_all`
+    /// could leave a seeded DB behind at the same path, and the next run's
+    /// seeding `create()` would then collide on `harnesses.id`'s PRIMARY KEY.
+    /// The nanosecond stamp defeats cross-run PID reuse and the atomic counter
+    /// defeats same-process same-tag reuse, so each returned directory is unique
+    /// and can never alias another test's or a past run's residue. The directory
+    /// is (re)created empty so file-backed tests always start from a clean slate.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("sugo-{tag}-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("sugo-{tag}-{pid}-{nanos}-{counter}"));
+        // Defensive: should never already exist given the unique name, but if a
+        // path somehow aliased one, start from empty rather than inherit residue.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
