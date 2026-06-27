@@ -14,9 +14,10 @@ use sha2::{Digest, Sha256};
 
 /// Computes the SHA-256 content hash of a board definition.
 ///
-/// The hash is taken over the canonical serialized JSON and stored on each
-/// [`BoardVersion`] so identical definitions produce identical hashes,
-/// supporting integrity checks and deduplication.
+/// The hash is taken over the struct-field-declaration-order JSON produced by
+/// `serde_json::to_vec` and stored on each [`BoardVersion`] so identical
+/// definitions (with the same field values in the same field order) produce
+/// identical hashes, supporting integrity checks and deduplication.
 pub fn content_hash(def: &BoardDefinition) -> String {
     let json = serde_json::to_vec(def).expect("serialize board");
     let mut h = Sha256::new();
@@ -118,6 +119,9 @@ mod tests {
         assert_eq!(h.current_version, 1);
         assert_eq!(v.version_no, 1);
         assert_eq!(h.name, "h");
+        assert!(!v.content_hash.is_empty(), "content_hash must be non-empty");
+        // SHA-256 hexadecimal is exactly 64 characters
+        assert_eq!(v.content_hash.len(), 64, "content_hash must be SHA-256 hex (64 chars)");
     }
 
     #[tokio::test]
@@ -187,5 +191,25 @@ mod tests {
         .unwrap();
         let (h, _v) = repo.get(&out.harness_id).await.unwrap().unwrap();
         assert!(h.has_draft);
+    }
+
+    #[test]
+    fn content_hash_is_deterministic() {
+        // Two independently constructed BoardDefinition values with identical
+        // fields must produce the same hash: the hash depends only on content,
+        // not on the specific memory address or allocation order.
+        let make_def = || BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "intro".into(),
+                prompt: "hello".into(),
+                status: CellStatus::Active,
+                terminal: true,
+            }],
+            edges: vec![],
+        };
+        assert_eq!(content_hash(&make_def()), content_hash(&make_def()));
     }
 }

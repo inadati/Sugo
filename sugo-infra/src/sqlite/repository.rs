@@ -151,11 +151,12 @@ impl HarnessRepository for SqliteHarnessRepository {
         expected_lock: i64,
     ) -> Result<(), CoreError> {
         let mut conn = self.lock();
-        // Wrap "read lock_version -> compare -> INSERT board_version ->
-        // UPDATE harnesses" in one transaction. A mid-way failure is rolled
-        // back instead of committed, preventing an inconsistency where only the
-        // board_version is left behind.
-        let tx = conn.transaction().map_err(map_err)?;
+        // BEGIN IMMEDIATE acquires the write lock upfront so busy_timeout
+        // applies even in multi-process scenarios (a DEFERRED transaction's
+        // read→write upgrade bypasses busy_timeout to prevent deadlocks).
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(map_err)?;
 
         // Pre-SELECT lets us distinguish NotFound from LockConflict in the
         // returned error.
@@ -509,6 +510,64 @@ mod tests {
                 .version_no,
             1
         );
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Multi-connection write contention for `append_version()`: a second
+    /// connection on the SAME file (standing in for another process) holds the
+    /// write lock briefly while `append_version()` is called. With
+    /// `BEGIN IMMEDIATE`, `busy_timeout` applies to the lock-acquisition step,
+    /// so the call must WAIT and then succeed rather than returning SQLITE_BUSY.
+    ///
+    /// This regression guard verifies that the IMMEDIATE transaction mode used
+    /// by `append_version()` keeps the operation within the busy_timeout window,
+    /// in contrast to a DEFERRED transaction where read→write upgrades bypass it.
+    #[tokio::test]
+    async fn append_version_busy_timeout_absorbs_cross_connection_contention() {
+        use std::time::Duration;
+
+        let dir = temp_dir("busy-av");
+        let path = dir.join("busy-av.db");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let repo = SqliteHarnessRepository::open(&path_str).expect("open file repo");
+        // Seed h1 v1 so append_version has a valid target.
+        repo.create(&harness("h1", 1, 0), &version("h1-v1", "h1", 1, "orig"))
+            .await
+            .expect("seed h1");
+
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let holder_path = path_str.clone();
+        let holder = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(&holder_path).expect("holder connection");
+            conn.pragma_update(None, "busy_timeout", 5000)
+                .expect("holder busy_timeout");
+            conn.execute_batch("BEGIN IMMEDIATE")
+                .expect("holder acquires write lock");
+            acquired_tx.send(()).expect("signal lock acquired");
+            std::thread::sleep(Duration::from_millis(300));
+            conn.execute_batch("COMMIT").expect("holder releases lock");
+        });
+
+        acquired_rx.recv().expect("holder acquired the write lock");
+
+        // append_version with IMMEDIATE tx must wait for the holder to release
+        // and then succeed, not immediately return SQLITE_BUSY.
+        let mut h2 = harness("h1", 2, 1);
+        h2.current_version = 2;
+        h2.lock_version = 1;
+        let v2 = version("h1-v2", "h1", 2, "after-wait");
+        let res = repo.append_version(&h2, &v2, 0).await;
+        holder.join().expect("holder thread joins");
+        res.expect("busy_timeout must absorb contention on append_version");
+
+        let stored = repo
+            .get_version("h1", 2)
+            .await
+            .expect("read back")
+            .expect("h1 v2 persisted");
+        assert_eq!(stored.version_no, 2);
         drop(repo);
         let _ = std::fs::remove_dir_all(&dir);
     }

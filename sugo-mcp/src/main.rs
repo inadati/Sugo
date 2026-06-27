@@ -421,8 +421,10 @@ mod tests {
         let p = payload(&result);
         let harnesses = p["harnesses"].as_array().expect("harnesses array");
         assert_eq!(harnesses.len(), 1);
-        assert!(harnesses[0]["harness_id"].is_string());
-        assert!(harnesses[0]["current_version"].is_number());
+        assert!(harnesses[0]["harness_id"].is_string(), "harness_id must be a string");
+        assert_eq!(harnesses[0]["name"], serde_json::json!("a"), "name must be 'a'");
+        assert_eq!(harnesses[0]["current_version"], serde_json::json!(1), "initial version_no is 1");
+        assert_eq!(harnesses[0]["has_draft"], serde_json::json!(false), "default board has no draft");
     }
 
     #[tokio::test]
@@ -458,7 +460,7 @@ mod tests {
             .expect("edit succeeds");
         let p = payload(&result);
         assert_eq!(p["harness_id"], serde_json::json!(id));
-        assert!(p["new_version"].is_number());
-        assert!(p["lock_version"].is_number());
+        assert_eq!(p["new_version"], serde_json::json!(2), "first edit produces version_no 2");
+        assert_eq!(p["lock_version"], serde_json::json!(1), "first edit bumps lock_version to 1");
     }
 }

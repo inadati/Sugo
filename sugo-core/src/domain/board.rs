@@ -46,4 +46,64 @@ mod tests {
         let back: BoardDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(board, back);
     }
+
+    #[test]
+    fn board_json_roundtrip_rich() {
+        // Exercises the full shape: multiple cells, Draft status, edges with
+        // Guard=Some and Guard=None, to confirm none of these optional fields
+        // are silently dropped or corrupted through a serialization round-trip.
+        use crate::domain::cell::CellStatus;
+        use crate::domain::edge::{Edge, Guard};
+        let board = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "intro".into(),
+                    prompt: "hello".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "wip".into(),
+                    prompt: "work".into(),
+                    status: CellStatus::Draft,
+                    terminal: false,
+                },
+                Cell {
+                    id: "c3".into(),
+                    name: "done".into(),
+                    prompt: "".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                },
+            ],
+            edges: vec![
+                Edge {
+                    from: "c1".into(),
+                    to: "c2".into(),
+                    label: "next".into(),
+                    guard: Some(Guard { expr: "score > 0".into() }),
+                },
+                Edge {
+                    from: "c2".into(),
+                    to: "c3".into(),
+                    label: "finish".into(),
+                    guard: None,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&board).unwrap();
+        let back: BoardDefinition = serde_json::from_str(&json).unwrap();
+        assert_eq!(board, back);
+        // Draft status must survive the round-trip (not normalized to Active).
+        assert_eq!(back.cells[1].status, CellStatus::Draft);
+        // Guard=Some must survive without becoming None.
+        assert!(back.edges[0].guard.is_some());
+        assert_eq!(back.edges[0].guard.as_ref().unwrap().expr, "score > 0");
+        // Guard=None must remain None.
+        assert!(back.edges[1].guard.is_none());
+    }
 }

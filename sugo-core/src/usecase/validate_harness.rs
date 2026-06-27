@@ -46,6 +46,7 @@ mod tests {
         .unwrap();
         let report = validate_harness(&repo, &out.harness_id).await.unwrap();
         assert!(report.ok); // default_board is valid: active + terminal
+        assert!(report.issues.is_empty(), "default board must produce zero issues (no warnings either)");
     }
 
     #[tokio::test]

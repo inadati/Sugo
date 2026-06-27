@@ -250,4 +250,31 @@ mod tests {
         let repo = InMemoryHarnessRepository::new();
         contract_list_returns_created(&repo).await;
     }
+
+    #[tokio::test]
+    async fn fake_stored_content_hash_matches_recomputed() {
+        // InMemoryHarnessRepository must store and return the content_hash
+        // exactly as supplied, so that a recomputed hash from the retrieved
+        // definition matches the stored value — mirroring the sqlite integration
+        // test coverage that the fake-based tests otherwise miss.
+        use crate::usecase::create_harness::content_hash;
+        let repo = InMemoryHarnessRepository::new();
+        let def = sample_board("determinism-test");
+        let real_hash = content_hash(&def);
+        let h = harness("h1", "test", 1, 0);
+        let v = BoardVersion {
+            id: "v1".into(),
+            harness_id: "h1".into(),
+            version_no: 1,
+            content_hash: real_hash.clone(),
+            definition: def,
+            created_at: "2026-01-01T00:00:00+09:00".into(),
+        };
+        repo.create(&h, &v).await.expect("create ok");
+        let (_, stored_v) = repo.get("h1").await.expect("get ok").expect("present");
+        // The stored hash must equal the hash we supplied on create.
+        assert_eq!(stored_v.content_hash, real_hash);
+        // Re-computing from the retrieved definition must also match.
+        assert_eq!(content_hash(&stored_v.definition), stored_v.content_hash);
+    }
 }
