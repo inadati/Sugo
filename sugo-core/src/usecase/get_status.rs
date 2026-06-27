@@ -4,6 +4,7 @@
 //! baseline to surface which draft cells were added, producing the
 //! [`HarnessStatus`] (with [`DraftDiffEntry`] entries) consumed by callers.
 
+use crate::domain::board::BoardDefinition;
 use crate::domain::cell::CellStatus;
 use crate::error::CoreError;
 use crate::ports::repository::HarnessRepository;
@@ -32,8 +33,8 @@ pub struct HarnessStatus {
     pub has_draft: bool,
     /// Draft cells added relative to the last draft-free baseline version.
     pub draft_diff: Vec<DraftDiffEntry>,
-    /// Serialized current board definition JSON.
-    pub definition_json: String,
+    /// Current board definition (typed; callers project the fields they need).
+    pub definition: BoardDefinition,
 }
 
 /// Returns the current status of a harness, including its `draft_diff`.
@@ -83,6 +84,8 @@ pub async fn get_status(
 
     // draft_diff: current draft cells whose ids are not present in the baseline
     // (active prev version) cell set.
+    // Collect draft_diff first (it borrows v.definition.cells) so the typed
+    // definition can then be moved into the status without a clone.
     let draft_diff = v
         .definition
         .cells
@@ -91,15 +94,13 @@ pub async fn get_status(
         .filter(|c| !baseline_cells.contains(&c.id))
         .map(|c| DraftDiffEntry { cell_id: c.id.clone(), name: c.name.clone() })
         .collect();
-    let definition_json =
-        serde_json::to_string(&v.definition).map_err(|e| CoreError::Storage(e.to_string()))?;
     Ok(HarnessStatus {
         harness_id: h.id,
         name: h.name,
         current_version: h.current_version,
         has_draft: h.has_draft,
         draft_diff,
-        definition_json,
+        definition: v.definition,
     })
 }
 

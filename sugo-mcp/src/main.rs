@@ -12,7 +12,6 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use std::sync::Arc;
-use sugo_core::domain::board::BoardDefinition;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 use tools::RealIdClock;
 
@@ -81,14 +80,9 @@ impl SugoServer {
                     .await
                     .map_err(error::to_tool_error)?;
 
-                // `definition_json` is a strongly-typed `BoardDefinition` that
-                // `get_status` serialized, so it is trusted internal data. We
-                // restore it to the typed `BoardDefinition` rather than parsing
-                // an untyped `Value`: if it is somehow corrupt, deserialization
-                // fails loudly with a storage_error instead of silently emitting
-                // a contract-violating response.
-                let def: BoardDefinition =
-                    serde_json::from_str(&st.definition_json).map_err(error::serde_to_tool_error)?;
+                // `get_status` returns a typed `BoardDefinition`, so we project
+                // directly from it: no re-parse of self-produced data.
+                let def = &st.definition;
 
                 // Project each cell from its typed fields down to the four
                 // contract keys {id,name,status,terminal}. `prompt` is excluded
@@ -249,6 +243,7 @@ mod tests {
     //! envelopes) that pure argument-parsing unit tests cannot reach.
 
     use super::*;
+    use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
 
     /// Build a server backed by a fresh in-memory database.
