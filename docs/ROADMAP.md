@@ -11,60 +11,31 @@ Sugo は複数の独立サブシステムを含むため、段階的（縦切り
 
 | Phase | 名称 | 依存 | 状態 |
 |---|---|---|---|
-| P1 | コア基盤（DB＋最小MCP） | なし | 未着手 |
-| P2 | 進行エンジン | Nipper #179, P1 | 未着手 |
+| P1 | コア基盤（DB＋最小MCP） | なし | **完了** (2026-06-28) |
 | P3 | GUI（盤面の見える化＋編集） | P1 | 未着手 |
+| P2-core | 進行エンジン（Nipper連携なし） | P1 | 未着手 |
 | P4 | ドラフト確定＆整合運用 | P1, P3 | 未着手 |
 | P5 | プラグイン/スキル | P1〜P4 | 未着手 |
+| P2-nipper | Nipper inject API 接続（手動） | P2-core, Nipper #179 | 未着手 |
+
+> **順序について**: P2 は Nipper #179（inject API）への依存を切り離し、コア実装（P2-core）を先行させる。
+> Nipper 接続（P2-nipper）は全フェーズが揃った後、人間が手動で最後に繋ぐ。
 
 ---
 
-## P1: コア基盤（DB＋最小MCP）
+## P1: コア基盤（DB＋最小MCP）【完了】
 
 すべての土台となるデータモデルとその操作APIを作る。
 
 **成果物**
-- SQLite スキーマ
-  - `board_versions`: 盤面定義を不変 JSON ドキュメントとして保存（バージョニング）
-  - 正規化テーブル: ハーネスレジストリ / 実行状態(run) / イベント / outbox
-- 最小 MCP ツール
-  - `sugo_create_harness`: 空ハーネス／雛形を作成（縦切りを独立して動かす入口）
-  - `sugo_status`: 現状取得・差分提示
-  - `sugo_edit_cell`: マスのプロンプト編集
-  - `sugo_validate_harness`: 整合性検証（エッジ・到達性・終端の構造破綻を検出）
+- SQLite スキーマ（`harnesses` / `board_versions`）
+- 最小 MCP ツール: `sugo_create_harness` / `sugo_status` / `sugo_edit_cell` / `sugo_validate_harness`
+- ヘキサゴナルアーキテクチャ（sugo-core / sugo-infra / sugo-mcp）
 
-**完了条件（Exit）**
+**完了条件（Exit）** ✅
 - ハーネスを DB に作成・取得・検証できる
 - 盤面定義が不変な board_version としてバージョニングされる
 - 編集は既存 board_version を書き換えず新バージョンを生成する（楽観的ロック付き）
-
-**スコープ外**
-- 進行（advance）/ 実行（start）/ Nipper 連携 → P2
-- `runs` テーブルと run の board_version ピン留め → P2（実行系と同時）
-- GUI → P3
-
----
-
-## P2: 進行エンジン
-
-ハーネスを自動進行させる心臓部。Nipper 連携を含む。
-
-**成果物**
-- `runs` テーブル（run を board_version にピン留め）
-- jsonl 監視＋ストール検知（`~/.claude/projects/<sanitized>/<session-id>.jsonl`、`cwd` 照合）
-- `sugo_advance`: 進行
-- `sugo_start`: 実行開始
-- Nipper のローカル inject API 呼び出し（ローカル限定・トークン不要）
-
-**完了条件（Exit）**
-- 1 本のハーネスをマス→マスへ自動進行できる（ループ・分岐・ガードを含む）
-
-**依存**
-- **Nipper #179**（外部プロセスからの注入を受け付けるローカル inject API）
-- P1
-
-**スコープ外**
-- ドラフト確定フロー → P4
 
 ---
 
@@ -81,6 +52,27 @@ Sugo は複数の独立サブシステムを含むため、段階的（縦切り
 - GUI でマスを追加すると draft 登録され、差分がエージェント側から見える
 
 **依存**: P1
+
+---
+
+## P2-core: 進行エンジン（Nipper連携なし）
+
+ハーネスを自動進行させる心臓部。Nipper への注入以外のコアロジックを実装する。
+
+**成果物**
+- `runs` テーブル（run を board_version にピン留め）
+- `sugo_start`: 実行開始（run 作成・初期マス決定）
+- `sugo_advance`: 進行（現在マスのプロンプトを返し、次マスへ遷移）
+- jsonl 監視＋ストール検知（`~/.claude/projects/<sanitized>/<session-id>.jsonl`、`cwd` 照合）
+
+**完了条件（Exit）**
+- 1 本のハーネスをマス→マスへ自動進行できる（ループ・分岐・ガードを含む）
+- Nipper 注入なしでもツール呼び出しで動作検証できる
+
+**依存**: P1
+
+**スコープ外**
+- Nipper inject API 呼び出し → P2-nipper
 
 ---
 
@@ -115,3 +107,20 @@ Sugo は複数の独立サブシステムを含むため、段階的（縦切り
 - エージェントがスキルに従いマス著作・整合修正を行う
 
 **依存**: P1〜P4
+
+---
+
+## P2-nipper: Nipper inject API 接続（手動・最終工程）
+
+P2-core で実装した進行エンジンを Nipper のローカル inject API に接続する。
+全フェーズが揃った後、人間が最終工程として手動で実施する。
+
+**成果物**
+- `sugo_advance` から Nipper inject API（ローカル HTTP）を呼び出す実装
+- ルーティング鍵（プロジェクトパス）による inject 先特定
+- jsonl の `cwd` フィールドで照合するセッション同定
+
+**完了条件（Exit）**
+- Nipper 上で `sugo_advance` を呼ぶと次マスのプロンプトが Claude Code に自動注入される
+
+**依存**: P2-core, Nipper #179（外部）
