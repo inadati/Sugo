@@ -1,0 +1,17 @@
+[package]
+name = "sugo-mcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sugo-core = { path = "../sugo-core", features = ["schema"] }
+sugo-infra = { path = "../sugo-infra" }
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }

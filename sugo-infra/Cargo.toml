@@ -1,0 +1,16 @@
+[package]
+name = "sugo-infra"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sugo-core = { path = "../sugo-core" }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+# test-support exposes sugo_core::contract (the shared contract functions) and
+# fake::FakeIdClock, which the integration tests need. tokio is for #[tokio::test].
+sugo-core = { path = "../sugo-core", features = ["test-support"] }
+tokio = { workspace = true }

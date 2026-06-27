@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["sugo-core", "sugo-infra", "sugo-mcp"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["clock"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+rmcp = { version = "=1.8.0", features = ["server", "transport-io"] }
+schemars = "1"

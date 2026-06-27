@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.db
+*.db-shm
+*.db-wal
+
+# Harness internal coordination state (chot-harness); never commit.
+/.nipper/
