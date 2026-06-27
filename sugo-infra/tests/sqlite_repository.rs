@@ -1,3 +1,14 @@
+//! Integration tests for [`SqliteHarnessRepository`] driven entirely through
+//! the public [`HarnessRepository`] port.
+//!
+//! Covers create/get round-trips, board-version immutability, monotonic
+//! `version_no`, `UNIQUE`/lock-conflict rejection, transaction rollback, the
+//! application-level pre-SELECT `NotFound` guard, and the shared cross-crate
+//! contract suite run against the sqlite adapter. Connection-internal wiring
+//! that needs the private `Connection` (the FK regression guard, the WAL/
+//! `journal_mode` branch, `busy_timeout` contention, poison recovery) lives in
+//! the in-crate unit tests in `src/sqlite/repository.rs`.
+
 use sugo_core::ports::repository::HarnessRepository;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 
@@ -293,12 +304,13 @@ async fn content_hash_roundtrips_rich_definition() {
     );
 }
 
-/// FK enforcement: appending a board_version whose harness_id has no matching
-/// harness row is rejected. The repository's pre-SELECT surfaces this as
-/// NotFound; the test also drives the orphan INSERT directly through the public
-/// API to confirm rejection on real SQLite.
+/// Application-level pre-SELECT guard: `append_version` for a harness that does
+/// not exist returns `NotFound` (from its pre-SELECT) and persists nothing. This
+/// asserts the public-API guard only; the FK constraint itself is regression-
+/// guarded by the raw orphan-INSERT unit test in `src/sqlite/repository.rs`,
+/// which bypasses this pre-SELECT to exercise `PRAGMA foreign_keys = ON`.
 #[tokio::test]
-async fn orphan_board_version_is_rejected_by_fk() {
+async fn append_to_missing_harness_returns_not_found() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     // No harness "ghost" exists, so appending a board_version for it must fail.
     let mut h = harness("ghost", 2, 1);
@@ -309,34 +321,6 @@ async fn orphan_board_version_is_rejected_by_fk() {
     assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
     // The orphan version was not persisted.
     assert!(repo.get_version("ghost", 2).await.unwrap().is_none());
-}
-
-/// FK enforcement at the DB level: with PRAGMA foreign_keys=ON, a file-backed
-/// connection rejects an orphan board_versions row even if the application-level
-/// pre-SELECT were bypassed. We exercise this by inserting a harness, removing
-/// it, then attempting to append a version pointing at the now-missing parent.
-#[tokio::test]
-async fn fk_enforced_on_real_sqlite_connection() {
-    let dir = std::env::temp_dir().join(format!("sugo-fk-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("fk.db");
-    let path_str = path.to_str().unwrap();
-
-    let repo = SqliteHarnessRepository::open(path_str).unwrap();
-    let (h, v) = helpers::sample();
-    repo.create(&h, &v).await.unwrap();
-    // Sanity: the parent exists.
-    assert!(repo.get("h1").await.unwrap().is_some());
-
-    // Now attempt to append a version for a harness id that does not exist;
-    // FK enforcement (and the pre-SELECT) must reject it, leaving nothing behind.
-    let ghost = harness("missing", 2, 1);
-    let orphan = version("o1", "missing", 2, board("x"));
-    let err = repo.append_version(&ghost, &orphan, 0).await.unwrap_err();
-    assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
-    assert!(repo.get_version("missing", 2).await.unwrap().is_none());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Concurrency: two writers race the same expected_lock_version. Exactly one

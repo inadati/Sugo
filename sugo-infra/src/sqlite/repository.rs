@@ -58,8 +58,21 @@ impl SqliteHarnessRepository {
             // WAL improves reader/writer concurrency for file-backed databases.
             // It is meaningless for :memory: connections (they stay "memory"),
             // so it is only attempted here.
-            conn.pragma_update(None, "journal_mode", "WAL")
+            //
+            // `journal_mode` is a special PRAGMA: SQLite reports the resulting
+            // mode in a result row, and on some filesystems (e.g. networked FS)
+            // the switch can silently fall back to another mode without erroring.
+            // `pragma_update` discards that row, so we read the mode back and
+            // fail loudly if WAL was not actually applied, rather than running on
+            // an unexpected journal mode.
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
                 .map_err(map_err)?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                return Err(CoreError::Storage(format!(
+                    "expected WAL journal mode, got '{mode}'"
+                )));
+            }
         }
         conn.execute_batch(SCHEMA).map_err(map_err)?;
         Ok(Self {
@@ -271,4 +284,208 @@ fn select_version(
         })
     })
     .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Connection-level unit tests that need direct access to the repository's
+    //! private `Connection` (PRAGMA state, raw SQL, the poison-recovering
+    //! `lock()`). Behaviour reachable through the public port lives in the
+    //! integration suite (`tests/sqlite_repository.rs`); these cover the wiring
+    //! that the public API alone cannot exercise: that `foreign_keys=ON` is
+    //! actually applied, that the WAL branch matches `file_backed`, that
+    //! `busy_timeout` absorbs cross-connection write contention, and that a
+    //! poisoned mutex still yields a usable connection.
+    use super::*;
+    use sugo_core::domain::cell::{Cell, CellStatus};
+
+    /// Minimal valid board: one active terminal cell carrying `prompt`.
+    fn board(prompt: &str) -> BoardDefinition {
+        BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "c1".into(),
+                prompt: prompt.into(),
+                status: CellStatus::Active,
+                terminal: true,
+            }],
+            edges: vec![],
+        }
+    }
+
+    fn harness(id: &str, current_version: i64, lock_version: i64) -> Harness {
+        Harness {
+            id: id.into(),
+            name: "h".into(),
+            current_version,
+            has_draft: false,
+            lock_version,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+        }
+    }
+
+    fn version(id: &str, harness_id: &str, version_no: i64, prompt: &str) -> BoardVersion {
+        BoardVersion {
+            id: id.into(),
+            harness_id: harness_id.into(),
+            version_no,
+            definition: board(prompt),
+            content_hash: "hash".into(),
+            created_at: "t".into(),
+        }
+    }
+
+    /// A fresh temp directory unique to this process and `tag`.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sugo-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Poisoning the connection mutex (by panicking while the guard is held)
+    /// must not permanently brick the repository: a later `lock()` recovers the
+    /// inner guard and a real query through the recovered connection succeeds.
+    #[test]
+    fn lock_recovers_from_poisoned_mutex() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory repo");
+
+        // Panic while holding the lock to poison the mutex.
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = repo.conn.lock().expect("first lock is not yet poisoned");
+            panic!("intentional panic while holding the connection lock");
+        }));
+        assert!(unwound.is_err(), "the held-lock panic must unwind");
+        assert!(
+            repo.conn.is_poisoned(),
+            "the mutex must be poisoned after the panic"
+        );
+
+        // The recovering lock() must still hand back a usable connection.
+        let guard = repo.lock();
+        let count: i64 = guard
+            .query_row("SELECT count(*) FROM harnesses", [], |row| row.get(0))
+            .expect("query works on the recovered connection");
+        assert_eq!(count, 0, "schema is intact on the recovered connection");
+    }
+
+    /// Regression guard for `PRAGMA foreign_keys = ON`: a direct INSERT of an
+    /// orphan `board_versions` row (a `harness_id` with no parent) bypasses
+    /// `append_version`'s application-level pre-SELECT and must be rejected by
+    /// the FK constraint itself. If the pragma were silently removed this raw
+    /// INSERT would succeed and this test would fail — which is the point.
+    #[test]
+    fn raw_orphan_board_version_insert_is_rejected_by_fk() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory repo");
+        let conn = repo.lock();
+        let err = conn
+            .execute(
+                "INSERT INTO board_versions (id,harness_id,version_no,definition_json,content_hash,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+                rusqlite::params!["orphan-id", "ghost-harness", 1, "{}", "hash", "t"],
+            )
+            .expect_err("orphan board_version INSERT must violate the harness_id FK");
+        match err {
+            rusqlite::Error::SqliteFailure(e, _) => assert_eq!(
+                e.code,
+                rusqlite::ErrorCode::ConstraintViolation,
+                "expected an FK constraint violation, got {e:?}"
+            ),
+            other => panic!("expected a SqliteFailure constraint violation, got {other:?}"),
+        }
+    }
+
+    /// The `journal_mode` branch must match `file_backed`: an `in_memory()`
+    /// connection stays off WAL while an `open()` (file-backed) connection is
+    /// actually switched to WAL. Asserted by querying `PRAGMA journal_mode`.
+    #[test]
+    fn journal_mode_matches_file_backed_branch() {
+        let mem = SqliteHarnessRepository::in_memory().expect("in-memory repo");
+        let mem_mode: String = mem
+            .lock()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("read in-memory journal_mode");
+        assert!(
+            !mem_mode.eq_ignore_ascii_case("wal"),
+            "in_memory must not use WAL, got '{mem_mode}'"
+        );
+
+        let dir = temp_dir("jm");
+        let path = dir.join("jm.db");
+        let repo = SqliteHarnessRepository::open(path.to_str().unwrap()).expect("open file repo");
+        let file_mode: String = repo
+            .lock()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("read file-backed journal_mode");
+        assert!(
+            file_mode.eq_ignore_ascii_case("wal"),
+            "file-backed must use WAL, got '{file_mode}'"
+        );
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Multi-connection write contention: a second connection on the SAME file
+    /// (standing in for another process) holds the write lock briefly. With
+    /// `busy_timeout` set, a contended write from the repository must WAIT for
+    /// the holder to release and then succeed, rather than failing immediately
+    /// with `SQLITE_BUSY` ("database is locked"). A barrier channel makes the
+    /// lock ordering deterministic.
+    ///
+    /// The contended operation is a fresh `create()` rather than an
+    /// `append_version()`: `create()`'s deferred transaction issues a write as
+    /// its first statement, so it requests the write lock from the start and
+    /// `busy_timeout` applies. (An `append_version()` reads first, so its later
+    /// INSERT is a read→write upgrade for which SQLite returns BUSY immediately
+    /// and bypasses `busy_timeout` to avoid deadlock — the wrong path to test.)
+    #[tokio::test]
+    async fn busy_timeout_absorbs_cross_connection_write_contention() {
+        use std::time::Duration;
+
+        let dir = temp_dir("busy");
+        let path = dir.join("busy.db");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let repo = SqliteHarnessRepository::open(&path_str).expect("open file repo");
+        repo.create(&harness("h1", 1, 0), &version("v1", "h1", 1, "orig"))
+            .await
+            .expect("seed harness");
+
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let holder_path = path_str.clone();
+        let holder = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(&holder_path).expect("holder connection");
+            conn.pragma_update(None, "busy_timeout", 5000)
+                .expect("holder busy_timeout");
+            // Acquire the write lock, signal, then hold it briefly before COMMIT.
+            conn.execute_batch("BEGIN IMMEDIATE")
+                .expect("holder acquires write lock");
+            acquired_tx.send(()).expect("signal lock acquired");
+            std::thread::sleep(Duration::from_millis(300));
+            conn.execute_batch("COMMIT").expect("holder releases lock");
+        });
+
+        // Proceed only once the holder genuinely owns the write lock.
+        acquired_rx.recv().expect("holder acquired the write lock");
+
+        // This create contends for the write lock; busy_timeout must let it wait
+        // out the ~300ms holder instead of returning a SQLITE_BUSY storage error.
+        let res = repo
+            .create(&harness("h2", 1, 0), &version("v-h2", "h2", 1, "after-wait"))
+            .await;
+        holder.join().expect("holder thread joins");
+        res.expect("busy_timeout must absorb contention, not BUSY-fail");
+
+        assert_eq!(
+            repo.get_version("h2", 1)
+                .await
+                .expect("read back")
+                .expect("h2's version persisted")
+                .version_no,
+            1
+        );
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
