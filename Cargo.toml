@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sugo-core", "sugo-infra", "sugo-mcp"]
+members = ["sugo-core", "sugo-infra", "sugo-mcp", "sugo-gui/src-tauri"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -15,3 +15,5 @@ tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 rmcp = { version = "=1.8.0", features = ["server", "transport-io"] }
 schemars = "1"
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
