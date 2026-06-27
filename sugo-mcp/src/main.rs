@@ -12,6 +12,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use std::sync::Arc;
+use sugo_core::domain::board::BoardDefinition;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 use tools::RealIdClock;
 
@@ -80,31 +81,36 @@ impl SugoServer {
                     .await
                     .map_err(error::to_tool_error)?;
 
-                // The stored definition is a structured object; expose its cells
-                // and edges as top-level keys per the design I/O contract.
-                let definition: serde_json::Value =
+                // `definition_json` is a strongly-typed `BoardDefinition` that
+                // `get_status` serialized, so it is trusted internal data. We
+                // restore it to the typed `BoardDefinition` rather than parsing
+                // an untyped `Value`: if it is somehow corrupt, deserialization
+                // fails loudly with a storage_error instead of silently emitting
+                // a contract-violating response.
+                let def: BoardDefinition =
                     serde_json::from_str(&st.definition_json).map_err(error::serde_to_tool_error)?;
 
-                // Project each cell down to the four contract keys
-                // {id,name,status,terminal}; `prompt` is intentionally omitted so
-                // it never leaks through the status response (design L115).
-                let cells: Vec<serde_json::Value> = definition
-                    .get("cells")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .map(|cell| {
-                                serde_json::json!({
-                                    "id": cell.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                                    "name": cell.get("name").cloned().unwrap_or(serde_json::Value::Null),
-                                    "status": cell.get("status").cloned().unwrap_or(serde_json::Value::Null),
-                                    "terminal": cell.get("terminal").cloned().unwrap_or(serde_json::Value::Null),
-                                })
-                            })
-                            .collect()
+                // Project each cell from its typed fields down to the four
+                // contract keys {id,name,status,terminal}. `prompt` is excluded
+                // at the type level (we never read the field), so it cannot leak
+                // through the status response (design L115). `status` is the
+                // serde form of `CellStatus` ("active"/"draft").
+                let cells: Vec<serde_json::Value> = def
+                    .cells
+                    .iter()
+                    .map(|cell| {
+                        serde_json::json!({
+                            "id": cell.id,
+                            "name": cell.name,
+                            "status": cell.status,
+                            "terminal": cell.terminal,
+                        })
                     })
-                    .unwrap_or_default();
-                let edges = definition.get("edges").cloned().unwrap_or(serde_json::json!([]));
+                    .collect();
+                // Edges are emitted from the typed `Edge` values, so their shape
+                // is structured by the domain types rather than passed through as
+                // an untyped `Value`.
+                let edges = serde_json::to_value(&def.edges).map_err(error::serde_to_tool_error)?;
                 let draft_diff: Vec<serde_json::Value> = st
                     .draft_diff
                     .iter()
@@ -243,7 +249,6 @@ mod tests {
     //! envelopes) that pure argument-parsing unit tests cannot reach.
 
     use super::*;
-    use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
 
     /// Build a server backed by a fresh in-memory database.
