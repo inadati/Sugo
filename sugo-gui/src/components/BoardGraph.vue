@@ -16,8 +16,11 @@
 
 <script setup lang="ts">
 import { computed, markRaw } from "vue";
-import { VueFlow, Background, Controls, MiniMap } from "@vue-flow/core";
-import type { Node, Edge } from "@vue-flow/core";
+import { VueFlow } from "@vue-flow/core";
+import type { Node, Edge, NodeTypesObject } from "@vue-flow/core";
+import { Background } from "@vue-flow/background";
+import { Controls } from "@vue-flow/controls";
+import { MiniMap } from "@vue-flow/minimap";
 import CellNode from "./CellNode.vue";
 
 interface CellData {
@@ -39,7 +42,7 @@ const props = defineProps<{
   startCellId: string;
 }>();
 
-const nodeTypes = { cell: markRaw(CellNode) };
+const nodeTypes = { cell: markRaw(CellNode) } as NodeTypesObject;
 
 // グリッドレイアウト: 横 3列に並べる
 const nodes = computed<Node[]>(() =>
