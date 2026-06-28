@@ -58,6 +58,16 @@ mod tests {
     }
 
     #[test]
+    fn clock_skew_negative_elapsed_is_dead() {
+        // now is before the heartbeat (clock rewound) => negative elapsed => dead.
+        assert!(!is_live(
+            Some("2026-06-28T00:00:10+09:00"),
+            "2026-06-28T00:00:00+09:00",
+            15
+        ));
+    }
+
+    #[test]
     fn unparseable_is_dead() {
         assert!(!is_live(Some("not-a-date"), "2026-06-28T00:00:10+09:00", 15));
     }

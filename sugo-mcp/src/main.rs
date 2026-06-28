@@ -340,15 +340,15 @@ impl SugoServer {
         .map_err(error::to_tool_error)?;
 
         // Inject the next cell's prompt into the attached Nipper session.
-        if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await {
-            if let Some(pp) = run.project_path.as_deref() {
-                let inj = nipper_client::inject(&self.nipper_base, pp, &out.prompt).await;
-                if let Some(e) = error::nipper_outcome_error(inj) {
-                    return Err(e);
-                }
-                if out.terminal {
-                    let _ = nipper_client::detach(&self.nipper_base, pp).await;
-                }
+        if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await
+            && let Some(pp) = run.project_path.as_deref()
+        {
+            let inj = nipper_client::inject(&self.nipper_base, pp, &out.prompt).await;
+            if let Some(e) = error::nipper_outcome_error(inj) {
+                return Err(e);
+            }
+            if out.terminal {
+                let _ = nipper_client::detach(&self.nipper_base, pp).await;
             }
         }
 
@@ -974,7 +974,7 @@ mod tests {
             .await
             .unwrap();
         let st_p = payload(&st);
-        assert_eq!(st_p["has_draft"].as_bool().unwrap(), false);
+        assert!(!st_p["has_draft"].as_bool().unwrap());
     }
 
     #[tokio::test]
