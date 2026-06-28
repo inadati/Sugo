@@ -9,6 +9,8 @@ pub enum RunStatus {
     Running,
     Done,
     Stalled,
+    Disconnected,
+    Closed,
 }
 
 impl std::fmt::Display for RunStatus {
@@ -17,6 +19,8 @@ impl std::fmt::Display for RunStatus {
             RunStatus::Running => write!(f, "running"),
             RunStatus::Done => write!(f, "done"),
             RunStatus::Stalled => write!(f, "stalled"),
+            RunStatus::Disconnected => write!(f, "disconnected"),
+            RunStatus::Closed => write!(f, "closed"),
         }
     }
 }
@@ -38,5 +42,7 @@ pub struct Run {
     /// Absolute path of the project directory; used to match jsonl `cwd` records.
     pub project_path: Option<String>,
     pub created_at: String,
+    /// Last time a Nipper heartbeat was received for this run (RFC3339). None until first heartbeat.
+    pub last_heartbeat_at: Option<String>,
     pub updated_at: String,
 }

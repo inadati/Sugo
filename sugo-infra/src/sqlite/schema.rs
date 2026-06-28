@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS runs (
   status           TEXT NOT NULL DEFAULT 'running',
   project_path     TEXT,
   created_at       TEXT NOT NULL,
-  updated_at       TEXT NOT NULL
+  updated_at       TEXT NOT NULL,
+  last_heartbeat_at TEXT
 );
 "#;

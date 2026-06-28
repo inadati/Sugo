@@ -10,9 +10,9 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let db_dir = app.path().app_data_dir().expect("app_data_dir");
-            std::fs::create_dir_all(&db_dir).expect("create db dir");
-            let db_path = db_dir.join("sugo.db");
+            // Share the single source-of-truth DB at ~/.sugo/sugo.db with the
+            // MCP server, rather than the GUI's private app-data directory.
+            let db_path = sugo_infra::paths::default_db_path().expect("resolve db path");
             let state = AppState::new(db_path.to_str().unwrap()).expect("init db");
             app.manage(state);
             Ok(())

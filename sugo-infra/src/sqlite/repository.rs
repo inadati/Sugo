@@ -75,6 +75,21 @@ impl SqliteHarnessRepository {
             }
         }
         conn.execute_batch(SCHEMA).map_err(map_err)?;
+        // Idempotent migration for pre-existing DBs whose `runs` table predates
+        // the last_heartbeat_at column. CREATE TABLE IF NOT EXISTS won't add it.
+        let has_col: bool = conn
+            .prepare("PRAGMA table_info(runs)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "last_heartbeat_at"))
+            })
+            .map_err(map_err)?;
+        if !has_col {
+            conn.execute("ALTER TABLE runs ADD COLUMN last_heartbeat_at TEXT", [])
+                .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -570,5 +585,25 @@ mod tests {
         assert_eq!(stored.version_no, 2);
         drop(repo);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migration_adds_heartbeat_column_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db");
+        let p = path.to_str().unwrap();
+        // First open creates schema + column.
+        let _r1 = SqliteHarnessRepository::open(p).unwrap();
+        // Second open must not fail (column already present).
+        let _r2 = SqliteHarnessRepository::open(p).unwrap();
+        // Column exists.
+        let conn = rusqlite::Connection::open(p).unwrap();
+        let mut s = conn.prepare("PRAGMA table_info(runs)").unwrap();
+        let cols: Vec<String> = s
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|c| c.unwrap())
+            .collect();
+        assert!(cols.iter().any(|c| c == "last_heartbeat_at"));
     }
 }

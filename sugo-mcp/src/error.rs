@@ -7,6 +7,7 @@
 //! `Display` form and never depends on the code prefix, so callers branch on
 //! the structured code rather than parsing the message string.
 
+use crate::nipper_client::NipperOutcome;
 use rmcp::ErrorData;
 use serde_json::json;
 use sugo_core::error::CoreError;
@@ -39,6 +40,18 @@ pub fn to_tool_error(e: CoreError) -> ErrorData {
 /// failure paths share the same structured `code` mapping.
 pub fn serde_to_tool_error(e: serde_json::Error) -> ErrorData {
     to_tool_error(CoreError::Storage(e.to_string()))
+}
+
+/// Convert a non-Ok Nipper call outcome into a tool error with a stable code.
+/// Returns None for `Ok` (caller proceeds).
+pub fn nipper_outcome_error(outcome: NipperOutcome) -> Option<ErrorData> {
+    let (msg, code) = match outcome {
+        NipperOutcome::Ok => return None,
+        NipperOutcome::NoSession => ("no live Nipper chat session for this project_path", "no_session"),
+        NipperOutcome::BadRequest => ("Nipper rejected the request", "bad_request"),
+        NipperOutcome::Unreachable => ("Nipper inject API is unreachable on 127.0.0.1:8771", "nipper_unreachable"),
+    };
+    Some(ErrorData::internal_error(msg.to_string(), Some(json!({ "code": code }))))
 }
 
 #[cfg(test)]
@@ -110,6 +123,23 @@ mod tests {
         let e = to_tool_error(CoreError::NotFound("h1".into()));
         assert!(!e.message.starts_with('['));
         assert_eq!(e.message, "not found: h1");
+    }
+
+    #[test]
+    fn nipper_no_session_maps_code() {
+        let e = nipper_outcome_error(NipperOutcome::NoSession).unwrap();
+        assert_eq!(code_of(&e), "no_session");
+    }
+
+    #[test]
+    fn nipper_ok_is_none() {
+        assert!(nipper_outcome_error(NipperOutcome::Ok).is_none());
+    }
+
+    #[test]
+    fn nipper_unreachable_maps_code() {
+        let e = nipper_outcome_error(NipperOutcome::Unreachable).unwrap();
+        assert_eq!(code_of(&e), "nipper_unreachable");
     }
 
     #[test]

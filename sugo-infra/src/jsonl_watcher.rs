@@ -38,14 +38,13 @@ pub fn check_stall(project_path: &str, timeout_secs: u64) -> StallInfo {
                     .unwrap_or(false)
             });
             if !matches_cwd { continue; }
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(dur) = SystemTime::now().duration_since(modified) {
-                        let secs = dur.as_secs();
-                        if min_secs.map(|m| secs < m).unwrap_or(true) {
-                            min_secs = Some(secs);
-                        }
-                    }
+            if let Ok(meta) = std::fs::metadata(&path)
+                && let Ok(modified) = meta.modified()
+                && let Ok(dur) = SystemTime::now().duration_since(modified)
+            {
+                let secs = dur.as_secs();
+                if min_secs.map(|m| secs < m).unwrap_or(true) {
+                    min_secs = Some(secs);
                 }
             }
         }

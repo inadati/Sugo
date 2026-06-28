@@ -67,6 +67,7 @@ pub async fn start_run(
         status: RunStatus::Running,
         project_path: input.project_path,
         created_at: now.clone(),
+        last_heartbeat_at: None,
         updated_at: now,
     };
     let run_id = run.id.clone();

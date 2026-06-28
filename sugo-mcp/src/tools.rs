@@ -73,9 +73,8 @@ pub struct ValidateArgs {
 pub struct StartArgs {
     /// Id of the harness to run.
     pub harness_id: String,
-    /// Absolute path of the project directory for jsonl stall detection. Optional.
-    #[serde(default)]
-    pub project_path: Option<String>,
+    /// Absolute path of the project directory. Required: Nipper-linked runs route by it.
+    pub project_path: String,
 }
 
 /// Arguments for `sugo_advance`.
@@ -225,10 +224,17 @@ mod tests {
     }
 
     #[test]
-    fn start_args_defaults_project_path_to_none() {
-        let args: StartArgs = serde_json::from_str(r#"{"harness_id":"h1"}"#).unwrap();
+    fn start_args_requires_project_path() {
+        let res: Result<StartArgs, _> = serde_json::from_str(r#"{"harness_id":"h1"}"#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn start_args_round_trip() {
+        let args: StartArgs =
+            serde_json::from_str(r#"{"harness_id":"h1","project_path":"/abs/p"}"#).unwrap();
         assert_eq!(args.harness_id, "h1");
-        assert!(args.project_path.is_none());
+        assert_eq!(args.project_path, "/abs/p");
     }
 
     #[test]
