@@ -6,13 +6,12 @@
 
 /// DDL applied at repository initialization.
 ///
-/// Creates the two P1 tables: `harnesses` (head pointer plus optimistic-lock
-/// counter) and `board_versions` (immutable definition snapshots). The
-/// `board_versions.harness_id` foreign key is enforced only when the connection
-/// has `PRAGMA foreign_keys = ON`, which the repository sets on open; see
-/// [`crate::sqlite::SqliteHarnessRepository`]. The `UNIQUE(harness_id,
-/// version_no)` constraint guarantees board-version immutability by rejecting
-/// silent overwrites of an existing version number.
+/// Creates the P1 tables (`harnesses`, `board_versions`) and the P2 `runs`
+/// table.  The `board_versions.harness_id` foreign key is enforced only when
+/// the connection has `PRAGMA foreign_keys = ON`, which the repository sets on
+/// open; see [`crate::sqlite::SqliteHarnessRepository`]. The
+/// `UNIQUE(harness_id, version_no)` constraint guarantees board-version
+/// immutability by rejecting silent overwrites of an existing version number.
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS harnesses (
   id              TEXT PRIMARY KEY,
@@ -31,5 +30,15 @@ CREATE TABLE IF NOT EXISTS board_versions (
   content_hash    TEXT NOT NULL,
   created_at      TEXT NOT NULL,
   UNIQUE(harness_id, version_no)
+);
+CREATE TABLE IF NOT EXISTS runs (
+  id               TEXT PRIMARY KEY,
+  harness_id       TEXT NOT NULL,
+  board_version_no INTEGER NOT NULL,
+  current_cell_id  TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'running',
+  project_path     TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
 );
 "#;

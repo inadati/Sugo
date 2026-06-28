@@ -14,3 +14,4 @@ async-trait = { workspace = true }
 # fake::FakeIdClock, which the integration tests need. tokio is for #[tokio::test].
 sugo-core = { path = "../sugo-core", features = ["test-support"] }
 tokio = { workspace = true }
+tempfile = { workspace = true }

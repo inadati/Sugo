@@ -18,6 +18,8 @@ fn code_for(e: &CoreError) -> &'static str {
         CoreError::LockConflict { .. } => "lock_conflict",
         CoreError::Validation(_) => "validation_failed",
         CoreError::Storage(_) => "storage_error",
+        CoreError::DraftCellsExist => "draft_cells_exist",
+        CoreError::RunNotRunning => "run_not_running",
     }
 }
 
@@ -81,6 +83,18 @@ mod tests {
         }];
         let e = to_tool_error(CoreError::Validation(issues));
         assert_eq!(code_of(&e), "validation_failed");
+    }
+
+    #[test]
+    fn maps_draft_cells_exist_code() {
+        let e = to_tool_error(CoreError::DraftCellsExist);
+        assert_eq!(code_of(&e), "draft_cells_exist");
+    }
+
+    #[test]
+    fn maps_run_not_running_code() {
+        let e = to_tool_error(CoreError::RunNotRunning);
+        assert_eq!(code_of(&e), "run_not_running");
     }
 
     #[test]
