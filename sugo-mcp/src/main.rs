@@ -468,7 +468,12 @@ impl ServerHandler for SugoServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db_path = std::env::var("SUGO_DB").unwrap_or_else(|_| "sugo.db".into());
+    let db_path = match std::env::var("SUGO_DB") {
+        Ok(p) => p,
+        Err(_) => sugo_infra::paths::default_db_path()?
+            .to_string_lossy()
+            .into_owned(),
+    };
     let harness_repo = Arc::new(SqliteHarnessRepository::open(&db_path)?);
     // SqliteRunRepository shares the same DB file via a separate connection.
     // The schema (including `runs` table) is applied by SqliteHarnessRepository::open.

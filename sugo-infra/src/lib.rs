@@ -8,3 +8,4 @@
 
 pub mod sqlite;
 pub mod jsonl_watcher;
+pub mod paths;
