@@ -12,6 +12,7 @@ pub mod advance_run;
 pub mod create_harness;
 pub mod edit_cell;
 pub mod get_status;
+pub mod lease;
 pub mod start_run;
 pub mod update_harness;
 pub mod validate_harness;
