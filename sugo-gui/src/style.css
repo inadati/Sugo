@@ -1,7 +1,7 @@
+/* Vue Flow のスタイルを読み込む（@import は他の文より前に置く必要がある） */
+@import "@vue-flow/core/dist/style.css";
+@import "@vue-flow/core/dist/theme-default.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Vue Flow のスタイルを読み込む */
-@import "@vue-flow/core/dist/style.css";
-@import "@vue-flow/core/dist/theme-default.css";
