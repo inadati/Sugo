@@ -87,6 +87,56 @@ pub struct AdvanceArgs {
     pub edge_label: String,
 }
 
+/// Per-cell change in a `sugo_update_harness` call.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CellChangeArgs {
+    /// Id of the cell to update.
+    pub cell_id: String,
+    /// New prompt text; omit to keep the current prompt.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// New status: "active" or "draft"; omit to keep the current status.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Identifies an edge to remove by its (from, to, label) triple.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EdgeKeyArgs {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+}
+
+/// An edge to add in a `sugo_update_harness` call.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EdgeAddArgs {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+    /// Optional branch condition expression.
+    #[serde(default)]
+    pub guard: Option<String>,
+}
+
+/// Arguments for `sugo_update_harness`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// Optimistic-lock version the caller expects to edit against.
+    pub expected_lock_version: i64,
+    /// Per-cell changes (prompt and/or status); defaults to empty.
+    #[serde(default)]
+    pub cell_changes: Vec<CellChangeArgs>,
+    /// Edges to add; defaults to empty.
+    #[serde(default)]
+    pub edge_add: Vec<EdgeAddArgs>,
+    /// Edges to remove (matched by from+to+label); defaults to empty.
+    #[serde(default)]
+    pub edge_remove: Vec<EdgeKeyArgs>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +237,50 @@ mod tests {
             serde_json::from_str(r#"{"run_id":"r1","edge_label":"next"}"#).unwrap();
         assert_eq!(args.run_id, "r1");
         assert_eq!(args.edge_label, "next");
+    }
+
+    #[test]
+    fn update_args_cell_changes_default_to_empty() {
+        let args: UpdateArgs = serde_json::from_str(
+            r#"{"harness_id":"h1","expected_lock_version":3}"#,
+        )
+        .unwrap();
+        assert_eq!(args.harness_id, "h1");
+        assert_eq!(args.expected_lock_version, 3);
+        assert!(args.cell_changes.is_empty());
+        assert!(args.edge_add.is_empty());
+        assert!(args.edge_remove.is_empty());
+    }
+
+    #[test]
+    fn update_args_full_round_trip() {
+        let json = r#"{
+            "harness_id": "h1",
+            "expected_lock_version": 2,
+            "cell_changes": [{"cell_id":"c1","prompt":"new","status":"active"}],
+            "edge_add": [{"from":"c1","to":"c2","label":"next"}],
+            "edge_remove": [{"from":"c2","to":"c3","label":"old"}]
+        }"#;
+        let args: UpdateArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.cell_changes[0].cell_id, "c1");
+        assert_eq!(args.cell_changes[0].prompt.as_deref(), Some("new"));
+        assert_eq!(args.cell_changes[0].status.as_deref(), Some("active"));
+        assert_eq!(args.edge_add[0].from, "c1");
+        assert_eq!(args.edge_remove[0].label, "old");
+    }
+
+    #[test]
+    fn cell_change_args_all_optional_fields_default_to_none() {
+        let args: CellChangeArgs = serde_json::from_str(r#"{"cell_id":"c1"}"#).unwrap();
+        assert_eq!(args.cell_id, "c1");
+        assert!(args.prompt.is_none());
+        assert!(args.status.is_none());
+    }
+
+    #[test]
+    fn edge_add_args_guard_defaults_to_none() {
+        let args: EdgeAddArgs =
+            serde_json::from_str(r#"{"from":"c1","to":"c2","label":"next"}"#).unwrap();
+        assert!(args.guard.is_none());
     }
 }

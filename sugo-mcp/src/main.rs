@@ -326,6 +326,79 @@ impl SugoServer {
         });
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
+
+    /// Batch-update cells and edges in one new board version.
+    #[tool(description = "Batch-update a harness in a single new board version. \
+        cell_changes: [{cell_id, prompt?, status?}] — prompt and status are optional \
+        (omit to keep current; status must be 'active' or 'draft'). \
+        edge_add: [{from, to, label, guard?}] — edges to add. \
+        edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
+        All three arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
+    async fn sugo_update_harness(
+        &self,
+        Parameters(args): Parameters<tools::UpdateArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::domain::cell::CellStatus;
+        use sugo_core::domain::edge::{Edge, Guard};
+        use sugo_core::usecase::update_harness::{
+            CellChange, EdgeKey, UpdateHarnessInput, update_harness,
+        };
+
+        let cell_changes: Vec<CellChange> = args
+            .cell_changes
+            .into_iter()
+            .map(|c| {
+                let status = match c.status.as_deref() {
+                    None => Ok(None),
+                    Some("active") => Ok(Some(CellStatus::Active)),
+                    Some("draft") => Ok(Some(CellStatus::Draft)),
+                    Some(other) => Err(ErrorData::invalid_params(
+                        format!("unknown status '{}': must be 'active' or 'draft'", other),
+                        Some(serde_json::json!({ "code": "invalid_arguments" })),
+                    )),
+                }?;
+                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status })
+            })
+            .collect::<Result<_, ErrorData>>()?;
+
+        let edge_add: Vec<Edge> = args
+            .edge_add
+            .into_iter()
+            .map(|e| Edge {
+                from: e.from,
+                to: e.to,
+                label: e.label,
+                guard: e.guard.map(|expr| Guard { expr }),
+            })
+            .collect();
+
+        let edge_remove: Vec<EdgeKey> = args
+            .edge_remove
+            .into_iter()
+            .map(|k| EdgeKey { from: k.from, to: k.to, label: k.label })
+            .collect();
+
+        let out = update_harness(
+            self.repo.as_ref(),
+            self.clock.as_ref(),
+            UpdateHarnessInput {
+                harness_id: args.harness_id,
+                expected_lock_version: args.expected_lock_version,
+                cell_changes,
+                edge_add,
+                edge_remove,
+            },
+        )
+        .await
+        .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({
+            "harness_id": out.harness_id,
+            "new_version": out.new_version,
+            "lock_version": out.lock_version,
+        });
+        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -337,7 +410,8 @@ impl ServerHandler for SugoServer {
              sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance. \
              Editing a cell always produces a new immutable board version guarded \
              by an optimistic lock. sugo_start begins a run and returns the first \
-             cell's prompt; sugo_advance follows an edge to the next cell."
+             cell's prompt; sugo_advance follows an edge to the next cell; \
+             sugo_update_harness batch-updates cells and edges in one new board version."
                 .to_string(),
         );
         info
@@ -747,5 +821,126 @@ mod tests {
             .await
             .expect_err("Done run must reject");
         assert_eq!(error_code(&err), "run_not_running");
+    }
+
+    /// A board with one active non-terminal cell and one draft terminal cell.
+    fn draft_board() -> BoardDefinition {
+        use sugo_core::domain::edge::Edge;
+        BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "start".into(),
+                    prompt: "do start".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "finish".into(),
+                    prompt: "".into(),
+                    status: CellStatus::Draft,
+                    terminal: true,
+                },
+            ],
+            edges: vec![
+                Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None },
+            ],
+        }
+    }
+
+    #[tokio::test]
+    async fn update_harness_promotes_draft_and_has_draft_becomes_false() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(draft_board())).await;
+
+        let result = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![tools::CellChangeArgs {
+                    cell_id: "c2".into(),
+                    prompt: Some("done".into()),
+                    status: Some("active".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await
+            .expect("update succeeds");
+
+        let p = payload(&result);
+        assert_eq!(p["harness_id"].as_str().unwrap(), hid);
+        assert_eq!(p["new_version"].as_i64().unwrap(), 2);
+        assert_eq!(p["lock_version"].as_i64().unwrap(), 1);
+
+        let st = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(hid.clone()) }))
+            .await
+            .unwrap();
+        let st_p = payload(&st);
+        assert_eq!(st_p["has_draft"].as_bool().unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn update_harness_then_start_succeeds() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(draft_board())).await;
+
+        srv.sugo_update_harness(Parameters(tools::UpdateArgs {
+            harness_id: hid.clone(),
+            expected_lock_version: 0,
+            cell_changes: vec![tools::CellChangeArgs {
+                cell_id: "c2".into(),
+                prompt: Some("done".into()),
+                status: Some("active".into()),
+            }],
+            edge_add: vec![],
+            edge_remove: vec![],
+        }))
+        .await
+        .expect("update succeeds");
+
+        let start_result = srv
+            .sugo_start(Parameters(tools::StartArgs {
+                harness_id: hid.clone(),
+                project_path: None,
+            }))
+            .await;
+        assert!(start_result.is_ok(), "sugo_start should succeed after draft promotion");
+    }
+
+    #[tokio::test]
+    async fn update_harness_unknown_status_returns_invalid_arguments() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", None).await;
+
+        let err = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![tools::CellChangeArgs {
+                    cell_id: "start".into(),
+                    prompt: None,
+                    status: Some("unknown_status".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await
+            .expect_err("unknown status must be rejected");
+
+        let code = err
+            .data
+            .as_ref()
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(code, "invalid_arguments");
     }
 }
