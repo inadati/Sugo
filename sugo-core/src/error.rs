@@ -23,6 +23,13 @@ pub enum CoreError {
     /// Structural validation failed; carries the offending issues.
     #[error("validation failed with {} issue(s)", .0.len())]
     Validation(Vec<ValidationIssue>),
+    /// Harness has one or more draft cells; execution cannot start until all
+    /// cells are active (SPEC 決定10c).
+    #[error("harness has draft cells")]
+    DraftCellsExist,
+    /// `advance_run` was called on a run that is not in Running state.
+    #[error("run is not running")]
+    RunNotRunning,
     /// A persistence-layer failure surfaced from an adapter.
     #[error("storage error: {0}")]
     Storage(String),
@@ -36,5 +43,17 @@ mod tests {
     fn lock_conflict_message() {
         let e = CoreError::LockConflict { expected: 1, actual: 2 };
         assert_eq!(e.to_string(), "lock conflict: expected 1, actual 2");
+    }
+
+    #[test]
+    fn draft_cells_exist_message() {
+        let e = CoreError::DraftCellsExist;
+        assert_eq!(e.to_string(), "harness has draft cells");
+    }
+
+    #[test]
+    fn run_not_running_message() {
+        let e = CoreError::RunNotRunning;
+        assert_eq!(e.to_string(), "run is not running");
     }
 }

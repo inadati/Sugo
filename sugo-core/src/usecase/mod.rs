@@ -8,7 +8,9 @@
 //! [`get_status`] reports current state plus the draft difference. Use cases
 //! depend only on domain types and ports, never on concrete infrastructure.
 
+pub mod advance_run;
 pub mod create_harness;
 pub mod edit_cell;
 pub mod get_status;
+pub mod start_run;
 pub mod validate_harness;

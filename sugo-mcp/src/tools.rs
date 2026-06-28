@@ -68,6 +68,25 @@ pub struct ValidateArgs {
     pub definition: Option<BoardDefinition>,
 }
 
+/// Arguments for `sugo_start`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StartArgs {
+    /// Id of the harness to run.
+    pub harness_id: String,
+    /// Absolute path of the project directory for jsonl stall detection. Optional.
+    #[serde(default)]
+    pub project_path: Option<String>,
+}
+
+/// Arguments for `sugo_advance`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AdvanceArgs {
+    /// Id of the run to advance.
+    pub run_id: String,
+    /// Edge label to follow from the current cell.
+    pub edge_label: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +172,20 @@ mod tests {
         let args: ValidateArgs = serde_json::from_str(r#"{}"#).unwrap();
         assert!(args.harness_id.is_none());
         assert!(args.definition.is_none());
+    }
+
+    #[test]
+    fn start_args_defaults_project_path_to_none() {
+        let args: StartArgs = serde_json::from_str(r#"{"harness_id":"h1"}"#).unwrap();
+        assert_eq!(args.harness_id, "h1");
+        assert!(args.project_path.is_none());
+    }
+
+    #[test]
+    fn advance_args_round_trip() {
+        let args: AdvanceArgs =
+            serde_json::from_str(r#"{"run_id":"r1","edge_label":"next"}"#).unwrap();
+        assert_eq!(args.run_id, "r1");
+        assert_eq!(args.edge_label, "next");
     }
 }

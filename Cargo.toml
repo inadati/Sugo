@@ -17,3 +17,4 @@ rmcp = { version = "=1.8.0", features = ["server", "transport-io"] }
 schemars = "1"
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
+tempfile = "3"

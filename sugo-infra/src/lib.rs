@@ -7,3 +7,4 @@
 //! the port traits, not on this crate.
 
 pub mod sqlite;
+pub mod jsonl_watcher;
