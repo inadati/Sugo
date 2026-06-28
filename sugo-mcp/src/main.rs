@@ -4,7 +4,9 @@
 //! `sugo-core` use case against a `SqliteHarnessRepository`, and serialises the
 //! result. Domain errors are mapped to tool errors via [`error::to_tool_error`].
 
+mod callback;
 mod error;
+mod nipper_client;
 mod tools;
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -21,6 +23,10 @@ struct SugoServer {
     repo: Arc<SqliteHarnessRepository>,
     run_repo: Arc<SqliteRunRepository>,
     clock: Arc<RealIdClock>,
+    /// Callback base URL this process advertises to Nipper at /attach time.
+    callback_url: String,
+    /// Nipper inject API base URL.
+    nipper_base: String,
     tool_router: ToolRouter<Self>,
 }
 
@@ -32,11 +38,18 @@ impl std::fmt::Debug for SugoServer {
 
 #[tool_router]
 impl SugoServer {
-    fn new(repo: Arc<SqliteHarnessRepository>, run_repo: Arc<SqliteRunRepository>) -> Self {
+    fn new(
+        repo: Arc<SqliteHarnessRepository>,
+        run_repo: Arc<SqliteRunRepository>,
+        callback_url: String,
+        nipper_base: String,
+    ) -> Self {
         Self {
             repo,
             run_repo,
             clock: Arc::new(RealIdClock),
+            callback_url,
+            nipper_base,
             tool_router: Self::tool_router(),
         }
     }
@@ -257,14 +270,32 @@ impl SugoServer {
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::start_run::{StartRunInput, start_run};
 
+        let project_path = args.project_path.trim().to_string();
+        if project_path.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "project_path must be a non-empty absolute path".to_string(),
+                Some(serde_json::json!({ "code": "invalid_arguments" })),
+            ));
+        }
+
         let out = start_run(
             self.repo.as_ref(),
             self.run_repo.as_ref(),
             self.clock.as_ref(),
-            StartRunInput { harness_id: args.harness_id, project_path: args.project_path },
+            StartRunInput { harness_id: args.harness_id, project_path: Some(project_path.clone()) },
         )
         .await
         .map_err(error::to_tool_error)?;
+
+        // Attach this run to the live Nipper chat session, then inject the first prompt.
+        let att = nipper_client::attach(&self.nipper_base, &project_path, &out.run_id, &self.callback_url).await;
+        if let Some(e) = error::nipper_outcome_error(att) {
+            return Err(e);
+        }
+        let inj = nipper_client::inject(&self.nipper_base, &project_path, &out.prompt).await;
+        if let Some(e) = error::nipper_outcome_error(inj) {
+            return Err(e);
+        }
 
         let edges: Vec<serde_json::Value> = out.edges.iter().map(|e| {
             let mut obj = serde_json::json!({
@@ -295,8 +326,10 @@ impl SugoServer {
         &self,
         Parameters(args): Parameters<tools::AdvanceArgs>,
     ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::ports::run_repository::RunRepository;
         use sugo_core::usecase::advance_run::{AdvanceRunInput, advance_run};
 
+        let run_id_for_lookup = args.run_id.clone();
         let out = advance_run(
             self.repo.as_ref(),
             self.run_repo.as_ref(),
@@ -305,6 +338,19 @@ impl SugoServer {
         )
         .await
         .map_err(error::to_tool_error)?;
+
+        // Inject the next cell's prompt into the attached Nipper session.
+        if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await {
+            if let Some(pp) = run.project_path.as_deref() {
+                let inj = nipper_client::inject(&self.nipper_base, pp, &out.prompt).await;
+                if let Some(e) = error::nipper_outcome_error(inj) {
+                    return Err(e);
+                }
+                if out.terminal {
+                    let _ = nipper_client::detach(&self.nipper_base, pp).await;
+                }
+            }
+        }
 
         let edges: Vec<serde_json::Value> = out.edges.iter().map(|e| {
             let mut obj = serde_json::json!({
@@ -411,7 +457,9 @@ impl ServerHandler for SugoServer {
              Editing a cell always produces a new immutable board version guarded \
              by an optimistic lock. sugo_start begins a run and returns the first \
              cell's prompt; sugo_advance follows an edge to the next cell; \
-             sugo_update_harness batch-updates cells and edges in one new board version."
+             sugo_update_harness batch-updates cells and edges in one new board version. \
+             sugo_start requires project_path and connects the run to the live Nipper chat \
+             session (127.0.0.1:8771), injecting each cell's prompt as the run advances."
                 .to_string(),
         );
         info
@@ -427,7 +475,16 @@ async fn main() -> anyhow::Result<()> {
     let run_conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| anyhow::anyhow!("open run_repo DB: {e}"))?;
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
-    let server = SugoServer::new(harness_repo, run_repo);
+
+    // Start the per-process callback server on an ephemeral port.
+    let callback_state = callback::CallbackState {
+        run_repo: run_repo.clone(),
+        clock: Arc::new(RealIdClock),
+    };
+    let callback_url = callback::start(callback_state).await?;
+    let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
+
+    let server = SugoServer::new(harness_repo, run_repo, callback_url, nipper_base);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -451,7 +508,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory conn");
         conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA).expect("schema");
         let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(conn)));
-        SugoServer::new(harness_repo, run_repo)
+        SugoServer::new(
+            harness_repo,
+            run_repo,
+            "http://127.0.0.1:1".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        )
     }
 
     /// Extract the single text payload from a successful tool result as JSON.
@@ -682,18 +744,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sugo_start_returns_run_and_prompt() {
+    async fn sugo_start_empty_project_path_is_invalid() {
+        // project_path is required and must be non-empty/non-whitespace.
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
-        let result = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: None }))
+        let err = srv
+            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: "  ".into() }))
             .await
-            .expect("start succeeds");
-        let p = payload(&result);
-        assert!(p["run_id"].is_string());
-        assert_eq!(p["cell_name"], serde_json::json!("start"));
-        assert!(p["prompt"].is_string());
-        assert!(p["edges"].is_array());
+            .expect_err("blank project_path must be rejected");
+        assert_eq!(error_code(&err), "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn sugo_start_attach_unreachable_without_nipper() {
+        // The run is created in core, then attach to the (absent) Nipper fails,
+        // surfacing nipper_unreachable. Happy-path injection is covered by manual E2E.
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let err = srv
+            .sugo_start(Parameters(tools::StartArgs { harness_id: id.clone(), project_path: "/abs/p".into() }))
+            .await
+            .expect_err("attach to absent Nipper must fail");
+        assert_eq!(error_code(&err), "nipper_unreachable");
+        // The run was still created before the attach attempt.
+        let runs = srv.run_repo.list_by_harness(&id).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].project_path.as_deref(), Some("/abs/p"));
     }
 
     #[tokio::test]
@@ -722,10 +799,26 @@ mod tests {
         };
         let id = create_harness(&srv, "h", Some(draft_board)).await;
         let err = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: None }))
+            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: "/abs/p".into() }))
             .await
             .expect_err("draft harness must be rejected");
         assert_eq!(error_code(&err), "draft_cells_exist");
+    }
+
+    /// Seed a run directly via the core start_run usecase (bypassing the HTTP
+    /// attach/inject the MCP handler performs), returning the run_id. Used by
+    /// advance tests so they don't depend on a live Nipper.
+    async fn seed_run(srv: &SugoServer, harness_id: &str) -> String {
+        use sugo_core::usecase::start_run::{StartRunInput, start_run};
+        let out = start_run(
+            srv.repo.as_ref(),
+            srv.run_repo.as_ref(),
+            srv.clock.as_ref(),
+            StartRunInput { harness_id: harness_id.into(), project_path: Some("/abs/p".into()) },
+        )
+        .await
+        .expect("seed start_run");
+        out.run_id
     }
 
     #[tokio::test]
@@ -758,23 +851,23 @@ mod tests {
                 guard: None,
             }],
         };
+        use sugo_core::ports::run_repository::RunRepository;
         let id = create_harness(&srv, "h", Some(two_cell)).await;
-        let start_res = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: None }))
-            .await
-            .unwrap();
-        let run_id = payload(&start_res)["run_id"].as_str().unwrap().to_string();
-        let adv = srv
+        let run_id = seed_run(&srv, &id).await;
+        // advance_run succeeds in core (run moves to terminal/Done), then the
+        // inject to the absent Nipper fails with nipper_unreachable. The core
+        // transition is still persisted before the inject attempt.
+        let err = srv
             .sugo_advance(Parameters(tools::AdvanceArgs {
-                run_id,
+                run_id: run_id.clone(),
                 edge_label: "next".into(),
             }))
             .await
-            .unwrap();
-        let p = payload(&adv);
-        assert_eq!(p["cell_name"], serde_json::json!("last"));
-        assert_eq!(p["terminal"], serde_json::json!(true));
-        assert!(p["edges"].as_array().unwrap().is_empty());
+            .expect_err("inject to absent Nipper must fail");
+        assert_eq!(error_code(&err), "nipper_unreachable");
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.current_cell_id, "c2");
+        assert_eq!(run.status, sugo_core::domain::run::RunStatus::Done);
     }
 
     #[tokio::test]
@@ -803,19 +896,19 @@ mod tests {
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
         };
         let id = create_harness(&srv, "h", Some(two_cell)).await;
-        let start_res = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: None }))
+        let run_id = seed_run(&srv, &id).await;
+        // advance to terminal (Done). Core transition succeeds; the subsequent
+        // inject to the absent Nipper errors with nipper_unreachable, but the
+        // run is already Done in the DB.
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+            }))
             .await
-            .unwrap();
-        let run_id = payload(&start_res)["run_id"].as_str().unwrap().to_string();
-        // advance to terminal (Done)
-        srv.sugo_advance(Parameters(tools::AdvanceArgs {
-            run_id: run_id.clone(),
-            edge_label: "next".into(),
-        }))
-        .await
-        .unwrap();
-        // advance again on Done run → run_not_running
+            .expect_err("inject to absent Nipper must fail");
+        assert_eq!(error_code(&err), "nipper_unreachable");
+        // advance again on Done run → run_not_running (core rejects before inject)
         let err = srv
             .sugo_advance(Parameters(tools::AdvanceArgs { run_id, edge_label: "next".into() }))
             .await
@@ -885,7 +978,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_harness_then_start_succeeds() {
+    async fn update_harness_then_start_passes_draft_check() {
         let srv = server();
         let hid = create_harness(&srv, "h", Some(draft_board())).await;
 
@@ -903,13 +996,18 @@ mod tests {
         .await
         .expect("update succeeds");
 
-        let start_result = srv
+        // After draft promotion sugo_start no longer rejects on draft_cells_exist;
+        // it proceeds to attach, which fails against the absent Nipper. That the
+        // error is nipper_unreachable (not draft_cells_exist) proves the draft
+        // gate was cleared. Happy-path injection is covered by manual E2E.
+        let err = srv
             .sugo_start(Parameters(tools::StartArgs {
                 harness_id: hid.clone(),
-                project_path: None,
+                project_path: "/abs/p".into(),
             }))
-            .await;
-        assert!(start_result.is_ok(), "sugo_start should succeed after draft promotion");
+            .await
+            .expect_err("attach to absent Nipper fails");
+        assert_eq!(error_code(&err), "nipper_unreachable");
     }
 
     #[tokio::test]
