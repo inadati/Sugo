@@ -11,6 +11,8 @@ fn parse_status(s: &str) -> RunStatus {
     match s {
         "done" => RunStatus::Done,
         "stalled" => RunStatus::Stalled,
+        "disconnected" => RunStatus::Disconnected,
+        "closed" => RunStatus::Closed,
         _ => RunStatus::Running,
     }
 }
@@ -20,6 +22,8 @@ fn status_str(s: &RunStatus) -> &'static str {
         RunStatus::Running => "running",
         RunStatus::Done => "done",
         RunStatus::Stalled => "stalled",
+        RunStatus::Disconnected => "disconnected",
+        RunStatus::Closed => "closed",
     }
 }
 
@@ -42,11 +46,12 @@ impl RunRepository for SqliteRunRepository {
     async fn create(&self, run: &Run) -> Result<(), CoreError> {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         conn.execute(
-            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 run.id, run.harness_id, run.board_version_no, run.current_cell_id,
-                status_str(&run.status), run.project_path, run.created_at, run.updated_at
+                status_str(&run.status), run.project_path, run.created_at, run.updated_at,
+                run.last_heartbeat_at
             ],
         )
         .map_err(map_err)?;
@@ -57,7 +62,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let row = conn
             .query_row(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at \
                  FROM runs WHERE id = ?1",
                 [run_id],
                 |row| {
@@ -73,6 +78,7 @@ impl RunRepository for SqliteRunRepository {
                         project_path: row.get(5)?,
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
+                        last_heartbeat_at: row.get(8)?,
                     })
                 },
             )
@@ -104,7 +110,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at \
                  FROM runs WHERE harness_id = ?1 ORDER BY created_at DESC",
             )
             .map_err(map_err)?;
@@ -122,10 +128,21 @@ impl RunRepository for SqliteRunRepository {
                     project_path: row.get(5)?,
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
+                    last_heartbeat_at: row.get(8)?,
                 })
             })
             .map_err(map_err)?;
         rows.map(|r| r.map_err(map_err)).collect()
+    }
+
+    async fn update_heartbeat(&self, run_id: &str, ts: &str) -> Result<(), CoreError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "UPDATE runs SET last_heartbeat_at = ?1 WHERE id = ?2",
+            rusqlite::params![ts, run_id],
+        )
+        .map_err(map_err)?;
+        Ok(())
     }
 }
 
@@ -152,6 +169,7 @@ mod tests {
             project_path: None,
             created_at: "2026-01-01T00:00:00+09:00".into(),
             updated_at: "2026-01-01T00:00:00+09:00".into(),
+            last_heartbeat_at: None,
         }
     }
 
@@ -197,5 +215,20 @@ mod tests {
         let list = r.list_by_harness("h1").await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "r1");
+    }
+
+    #[tokio::test]
+    async fn update_heartbeat_persists_timestamp() {
+        let r = repo();
+        r.create(&sample_run("r1")).await.unwrap();
+        r.update_heartbeat("r1", "2026-06-28T12:00:00+09:00").await.unwrap();
+        let got = r.get("r1").await.unwrap().unwrap();
+        assert_eq!(got.last_heartbeat_at.as_deref(), Some("2026-06-28T12:00:00+09:00"));
+    }
+
+    #[tokio::test]
+    async fn update_heartbeat_unknown_run_is_ok() {
+        let r = repo();
+        assert!(r.update_heartbeat("ghost", "2026-06-28T12:00:00+09:00").await.is_ok());
     }
 }
