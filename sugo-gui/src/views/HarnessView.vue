@@ -25,6 +25,17 @@
       :cells="detail.cells"
       :edges="detail.edges"
       :start-cell-id="detail.cells[0]?.id ?? ''"
+      @select="onSelectCell"
+    />
+
+    <!-- マス詳細パネル -->
+    <CellDetailPanel
+      v-if="selectedCell"
+      :harness-id="detail.harness_id"
+      :cell="selectedCell"
+      :lock-version="lockVersion"
+      @close="selectedCellId = null"
+      @renamed="onCellRenamed"
     />
 
     <!-- マス追加ダイアログ -->
@@ -40,14 +51,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import BoardGraph from "../components/BoardGraph.vue";
 import AddCellDialog from "../components/AddCellDialog.vue";
+import CellDetailPanel from "../components/CellDetailPanel.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
+
+interface Cell { id: string; name: string; prompt: string; status: string; terminal: boolean }
 
 interface HarnessDetail {
   harness_id: string;
@@ -55,7 +69,7 @@ interface HarnessDetail {
   current_version: number;
   lock_version: number;
   has_draft: boolean;
-  cells: { id: string; name: string; status: string; terminal: boolean }[];
+  cells: Cell[];
   edges: { from: string; to: string; label: string; guard: string | null }[];
   draft_diff: { cell_id: string; name: string }[];
 }
@@ -63,17 +77,75 @@ interface HarnessDetail {
 const detail = ref<HarnessDetail | null>(null);
 const lockVersion = ref(0);
 const showAddCell = ref(false);
+const selectedCellId = ref<string | null>(null);
+
+const selectedCell = computed<Cell | null>(
+  () => detail.value?.cells.find((c) => c.id === selectedCellId.value) ?? null
+);
 
 async function load() {
   detail.value = await invoke<HarnessDetail>("get_harness", { harnessId: props.id });
   lockVersion.value = detail.value.lock_version;
 }
 
-async function onCellAdded(newVersion: number, newLockVersion: number) {
+function onSelectCell(cellId: string) {
+  selectedCellId.value = cellId;
+}
+
+async function onCellAdded(_newVersion: number, newLockVersion: number) {
   showAddCell.value = false;
   lockVersion.value = newLockVersion;
   await load();
 }
 
-onMounted(load);
+async function onCellRenamed(_newVersion: number, newLockVersion: number) {
+  lockVersion.value = newLockVersion;
+  await load();
+}
+
+// ── ポーリング（#15）: current_version 変化時のみ再描画。非アクティブ時は停止 ──
+const POLL_INTERVAL_MS = 2000;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+async function poll() {
+  if (document.hidden) return;
+  try {
+    const latest = await invoke<HarnessDetail>("get_harness", { harnessId: props.id });
+    if (!detail.value || latest.current_version !== detail.value.current_version) {
+      detail.value = latest;
+      lockVersion.value = latest.lock_version;
+    }
+  } catch {
+    // 1 回の失敗は無視（次周期で自己修復）
+  }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+}
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+function onVisibilityChange() {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    startPolling();
+    void poll();
+  }
+}
+
+onMounted(() => {
+  void load();
+  startPolling();
+  document.addEventListener("visibilitychange", onVisibilityChange);
+});
+onUnmounted(() => {
+  stopPolling();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+});
 </script>
