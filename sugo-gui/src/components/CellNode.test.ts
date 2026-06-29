@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import CellNode from "./CellNode.vue";
 
@@ -33,5 +33,24 @@ describe("CellNode", () => {
       global: { stubs: { Handle: true } },
     });
     expect(wrapper.html()).toContain("border-green");
+  });
+
+  it("calls data.onSelect with cellId when clicked", async () => {
+    const onSelect = vi.fn();
+    const wrapper = mount(CellNode, {
+      props: {
+        data: {
+          cellId: "c1",
+          name: "start",
+          status: "active",
+          terminal: false,
+          isStart: true,
+          onSelect,
+        },
+      },
+      global: { stubs: { Handle: true } },
+    });
+    await wrapper.find('[data-testid="cell-node"]').trigger("click");
+    expect(onSelect).toHaveBeenCalledWith("c1");
   });
 });
