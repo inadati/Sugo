@@ -12,6 +12,7 @@ pub struct HarnessSummaryDto {
 pub struct CellDto {
     pub id: String,
     pub name: String,
+    pub prompt: String,
     pub status: String,
     pub terminal: bool,
 }

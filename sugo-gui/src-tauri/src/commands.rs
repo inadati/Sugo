@@ -42,6 +42,7 @@ pub async fn get_harness(
         .map(|c| CellDto {
             id: c.id.clone(),
             name: c.name.clone(),
+            prompt: c.prompt.clone(),
             status: match c.status {
                 CellStatus::Active => "active".to_string(),
                 CellStatus::Draft => "draft".to_string(),
@@ -234,6 +235,35 @@ mod tests {
         // draft_diff に c2 が含まれる（全セルが draft 混在の v1 = 基線なし）
         assert!(status.draft_diff.iter().any(|d| d.cell_id == "c2"));
         assert!(status.has_draft);
+    }
+
+    #[tokio::test]
+    async fn get_status_definition_carries_prompt() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "start".into(),
+                prompt: "do the thing".into(),
+                status: CellStatus::Active,
+                terminal: false,
+            }],
+            edges: vec![],
+        };
+        let out = create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+        )
+        .await
+        .unwrap();
+
+        let status = get_status(repo.as_ref(), &out.harness_id).await.unwrap();
+        let c1 = status.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(c1.prompt, "do the thing");
     }
 
     #[tokio::test]
