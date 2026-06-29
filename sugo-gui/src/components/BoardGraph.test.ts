@@ -59,4 +59,47 @@ describe("BoardGraph", () => {
     const vm = wrapper.vm as { flowEdges: { label: string }[] };
     expect(vm.flowEdges[0].label).toBe("next [x > 0]");
   });
+
+  it("lays out branch+loop cells with numeric positions", () => {
+    const cells = [
+      { id: "c1", name: "start", status: "active", terminal: false },
+      { id: "c2", name: "work", status: "active", terminal: false },
+      { id: "c3", name: "review", status: "active", terminal: false },
+      { id: "c4", name: "done", status: "active", terminal: true },
+    ];
+    const edges = [
+      { from: "c1", to: "c2", label: "begin", guard: null },
+      { from: "c2", to: "c3", label: "submit", guard: null },
+      { from: "c3", to: "c2", label: "fail", guard: "不合格" },
+      { from: "c3", to: "c4", label: "pass", guard: "合格" },
+    ];
+    const wrapper = mount(BoardGraph, {
+      props: { cells, edges, startCellId: "c1" },
+      global: { stubs: { VueFlow: true, Background: true, Controls: true, MiniMap: true } },
+    });
+    const vm = wrapper.vm as {
+      nodes: { id: string; position: { x: number; y: number } }[];
+      flowEdges: unknown[];
+    };
+    expect(vm.nodes.length).toBe(4);
+    expect(vm.flowEdges.length).toBe(4);
+    for (const n of vm.nodes) {
+      expect(typeof n.position.x).toBe("number");
+      expect(typeof n.position.y).toBe("number");
+    }
+  });
+
+  it("passes cellId and onSelect into node data and emits select", () => {
+    const wrapper = mount(BoardGraph, {
+      props: { cells: sampleCells, edges: sampleEdges, startCellId: "c1" },
+      global: { stubs: { VueFlow: true, Background: true, Controls: true, MiniMap: true } },
+    });
+    const vm = wrapper.vm as {
+      nodes: { data: { cellId: string; onSelect: (id: string) => void } }[];
+    };
+    expect(vm.nodes[0].data.cellId).toBe("c1");
+    vm.nodes[0].data.onSelect("c1");
+    expect(wrapper.emitted("select")).toBeTruthy();
+    expect(wrapper.emitted("select")![0]).toEqual(["c1"]);
+  });
 });

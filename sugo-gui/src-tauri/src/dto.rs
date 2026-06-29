@@ -12,6 +12,7 @@ pub struct HarnessSummaryDto {
 pub struct CellDto {
     pub id: String,
     pub name: String,
+    pub prompt: String,
     pub status: String,
     pub terminal: bool,
 }
@@ -44,6 +45,12 @@ pub struct HarnessDetailDto {
 
 #[derive(Debug, Serialize)]
 pub struct AddCellResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RenameCellResultDto {
     pub new_version: i64,
     pub lock_version: i64,
 }

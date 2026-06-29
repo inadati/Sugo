@@ -1,11 +1,13 @@
 <template>
   <div
+    data-testid="cell-node"
     :class="[
-      'rounded px-3 py-2 text-sm min-w-[120px] text-center border-2',
+      'rounded px-3 py-2 text-sm min-w-[120px] text-center border-2 cursor-pointer',
       data.status === 'draft' ? 'bg-yellow-50 border-yellow-400' : 'bg-white border-gray-300',
       data.isStart ? 'border-green-500' : '',
       data.terminal ? 'ring-2 ring-gray-400 ring-offset-1' : '',
     ]"
+    @click="data.onSelect?.(data.cellId)"
   >
     <div class="font-medium text-gray-800">{{ data.name }}</div>
     <div class="flex justify-center gap-1 mt-1">
@@ -24,10 +26,12 @@ import { Handle, Position } from "@vue-flow/core";
 
 defineProps<{
   data: {
+    cellId: string;
     name: string;
     status: string;
     terminal: boolean;
     isStart: boolean;
+    onSelect?: (cellId: string) => void;
   };
 }>();
 </script>

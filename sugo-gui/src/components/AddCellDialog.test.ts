@@ -40,7 +40,8 @@ describe("AddCellDialog", () => {
 
   it("shows lock conflict message when invoke rejects with lock_conflict", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
-    vi.mocked(invoke).mockRejectedValueOnce("CoreError::LockConflict: lock_conflict detected");
+    // backend(commands.rs map_core_error)が実際に返す安定コードと同一文字列で検証する
+    vi.mocked(invoke).mockRejectedValueOnce("lock_conflict");
     const wrapper = mount(AddCellDialog, {
       props: { harnessId: "h1", lockVersion: 0 },
     });
