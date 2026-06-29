@@ -60,8 +60,10 @@ const nameDraft = ref(props.cell.name);
 const errorMsg = ref("");
 const saving = ref(false);
 
-// 選択セルが切り替わったら下書きを同期する
-watch(() => props.cell, (c) => { nameDraft.value = c.name; errorMsg.value = ""; });
+// 選択セルが「別のセルに切り替わった」時のみ下書きを同期する。
+// cell.id を監視キーにすることで、ポーリングによる detail 差し替え（同一セル）で
+// 編集中の入力が破棄されるのを防ぐ。
+watch(() => props.cell.id, () => { nameDraft.value = props.cell.name; errorMsg.value = ""; });
 
 async function save() {
   if (!nameDraft.value.trim()) return;
