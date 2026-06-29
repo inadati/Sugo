@@ -105,7 +105,11 @@ pub async fn get_harness(
     })
 }
 
-/// マス追加（status: draft で登録）
+/// マス追加（status: draft で登録）。
+///
+/// 実体は [`add_cell_inner`] にあり、本コマンドはそれへの薄いラッパ。
+/// ロジックを repo 受け取りの自由関数に切り出すことで、Tauri State 無しに
+/// 単体テストできる（rename_cell と対称）。
 #[tauri::command]
 pub async fn add_cell(
     state: State<'_, AppState>,
@@ -113,11 +117,20 @@ pub async fn add_cell(
     cell_name: String,
     lock_version: i64,
 ) -> Result<AddCellResultDto, String> {
-    let (mut harness, head) = state
-        .repo
+    add_cell_inner(state.repo.as_ref(), harness_id, cell_name, lock_version).await
+}
+
+/// `add_cell` の実体。repo を直接受け取りテスト可能にする。
+async fn add_cell_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    cell_name: String,
+    lock_version: i64,
+) -> Result<AddCellResultDto, String> {
+    let (mut harness, head) = repo
         .get(&harness_id)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(map_core_error)?
         .ok_or_else(|| CoreError::NotFound(harness_id.clone()).to_string())?;
 
     let mut new_def = head.definition.clone();
@@ -146,9 +159,7 @@ pub async fn add_cell(
     harness.lock_version = lock_version + 1;
     harness.updated_at = now;
 
-    state
-        .repo
-        .append_version(&harness, &new_version, lock_version)
+    repo.append_version(&harness, &new_version, lock_version)
         .await
         .map_err(map_core_error)?;
 
@@ -229,15 +240,14 @@ async fn rename_cell_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::rename_cell_inner;
+    use super::{add_cell_inner, rename_cell_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
-    use sugo_core::domain::harness::BoardVersion;
     use sugo_core::error::CoreError;
     use sugo_core::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
     use sugo_core::ports::repository::HarnessRepository;
-    use sugo_core::usecase::create_harness::{content_hash, create_harness, CreateHarnessInput};
+    use sugo_core::usecase::create_harness::{create_harness, CreateHarnessInput};
     use sugo_core::usecase::get_status::get_status;
 
     // ── list_harnesses ──────────────────────────────────────────────────────
@@ -355,14 +365,14 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── add_cell ────────────────────────────────────────────────────────────
+    // ── add_cell（コマンド本体 add_cell_inner を直接実行）───────────────────
 
     #[tokio::test]
-    async fn add_cell_creates_draft_cell_and_bumps_version() {
-        let repo = Arc::new(InMemoryHarnessRepository::new());
+    async fn add_cell_inner_creates_draft_cell_and_bumps_version() {
+        let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
         let out = create_harness(
-            repo.as_ref(),
+            &repo,
             &clock,
             CreateHarnessInput { name: "h".into(), definition: None },
         )
@@ -370,81 +380,49 @@ mod tests {
         .unwrap();
 
         // lock_version は create 後 0
-        let (h, _) = repo.get(&out.harness_id).await.unwrap().unwrap();
-        let lv = h.lock_version;
+        let res = add_cell_inner(&repo, out.harness_id.clone(), "new".into(), 0)
+            .await
+            .unwrap();
+        assert_eq!(res.new_version, 2);
+        assert_eq!(res.lock_version, 1);
 
-        // add_cell をリポジトリ直接呼びでシミュレート（Tauri State なしで）
-        let (mut harness, head) = repo.get(&out.harness_id).await.unwrap().unwrap();
-        let mut new_def = head.definition.clone();
-        new_def.cells.push(Cell {
-            id: "new-c".into(),
-            name: "new".into(),
-            prompt: "".into(),
-            status: CellStatus::Draft,
-            terminal: false,
-        });
-        let new_version_no = harness.current_version + 1;
-        let new_bv = BoardVersion {
-            id: "bv-new".into(),
-            harness_id: harness.id.clone(),
-            version_no: new_version_no,
-            content_hash: content_hash(&new_def),
-            definition: new_def.clone(),
-            created_at: "2026-01-01T00:00:00+09:00".into(),
-        };
-        harness.current_version = new_version_no;
-        harness.has_draft = true;
-        harness.lock_version = lv + 1;
-        repo.append_version(&harness, &new_bv, lv).await.unwrap();
-
-        // 取得して確認
         let (h2, bv2) = repo.get(&out.harness_id).await.unwrap().unwrap();
         assert_eq!(h2.current_version, 2);
         assert!(h2.has_draft);
-        assert_eq!(h2.lock_version, lv + 1);
+        assert_eq!(h2.lock_version, 1);
         assert_eq!(bv2.definition.cells.len(), 2); // default 1 + added 1
-        assert_eq!(
-            bv2.definition.cells.last().unwrap().status,
-            CellStatus::Draft
-        );
+        let added = bv2.definition.cells.last().unwrap();
+        assert_eq!(added.name, "new");
+        assert_eq!(added.status, CellStatus::Draft);
     }
 
     #[tokio::test]
-    async fn add_cell_stale_lock_returns_error() {
-        let repo = Arc::new(InMemoryHarnessRepository::new());
+    async fn add_cell_inner_unknown_harness_returns_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = add_cell_inner(&repo, "nope".into(), "x".into(), 0)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn add_cell_inner_stale_lock_returns_lock_conflict_code() {
+        let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
         let out = create_harness(
-            repo.as_ref(),
+            &repo,
             &clock,
             CreateHarnessInput { name: "h".into(), definition: None },
         )
         .await
         .unwrap();
 
-        let (mut harness, head) = repo.get(&out.harness_id).await.unwrap().unwrap();
-        let mut new_def = head.definition.clone();
-        new_def.cells.push(Cell {
-            id: "c2".into(),
-            name: "two".into(),
-            prompt: "".into(),
-            status: CellStatus::Draft,
-            terminal: false,
-        });
-        let new_bv = BoardVersion {
-            id: "bv2".into(),
-            harness_id: harness.id.clone(),
-            version_no: 2,
-            content_hash: content_hash(&new_def),
-            definition: new_def,
-            created_at: "2026-01-01T00:00:00+09:00".into(),
-        };
-        harness.current_version = 2;
-        harness.has_draft = true;
-        harness.lock_version = 1;
-
-        // stale lock (expected=99, actual=0)
-        let result = repo.append_version(&harness, &new_bv, 99).await;
-        assert!(matches!(result, Err(CoreError::LockConflict { .. })));
+        // 実際の head lock は 0。期待 99 で競合させる。
+        let err = add_cell_inner(&repo, out.harness_id, "new".into(), 99)
+            .await
+            .unwrap_err();
+        // フロントが分岐する安定コードに一致すること（rename と対称）
+        assert_eq!(err, "lock_conflict");
     }
 
     // ── rename_cell（コマンド本体 rename_cell_inner を直接実行）──────────────
