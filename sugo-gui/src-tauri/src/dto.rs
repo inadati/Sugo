@@ -48,3 +48,9 @@ pub struct AddCellResultDto {
     pub new_version: i64,
     pub lock_version: i64,
 }
+
+#[derive(Debug, Serialize)]
+pub struct RenameCellResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}

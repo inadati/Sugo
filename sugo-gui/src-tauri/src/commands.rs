@@ -1,4 +1,4 @@
-use crate::dto::{AddCellResultDto, CellDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto};
+use crate::dto::{AddCellResultDto, CellDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::harness::BoardVersion;
@@ -141,6 +141,63 @@ pub async fn add_cell(
         .map_err(|e| e.to_string())?;
 
     Ok(AddCellResultDto {
+        new_version: new_version_no,
+        lock_version: harness.lock_version,
+    })
+}
+
+/// マスのタイトル（name）を編集する（新 board_version 生成・楽観ロック）
+#[tauri::command]
+pub async fn rename_cell(
+    state: State<'_, AppState>,
+    harness_id: String,
+    cell_id: String,
+    new_name: String,
+    lock_version: i64,
+) -> Result<RenameCellResultDto, String> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        return Err("empty_name".to_string());
+    }
+
+    let (mut harness, head) = state
+        .repo
+        .get(&harness_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| CoreError::NotFound(harness_id.clone()).to_string())?;
+
+    let mut new_def = head.definition.clone();
+    let cell = new_def
+        .cells
+        .iter_mut()
+        .find(|c| c.id == cell_id)
+        .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
+    cell.name = trimmed.to_string();
+
+    let new_version_no = harness.current_version + 1;
+    let now = chrono::Local::now().to_rfc3339();
+    let new_version = BoardVersion {
+        id: uuid::Uuid::new_v4().to_string(),
+        harness_id: harness_id.clone(),
+        version_no: new_version_no,
+        content_hash: content_hash(&new_def),
+        definition: new_def.clone(),
+        created_at: now.clone(),
+    };
+
+    harness.current_version = new_version_no;
+    harness.has_draft = new_def.cells.iter().any(|c| c.status == CellStatus::Draft);
+    harness.lock_version = lock_version + 1;
+    harness.updated_at = now;
+
+    state
+        .repo
+        .append_version(&harness, &new_version, lock_version)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RenameCellResultDto {
         new_version: new_version_no,
         lock_version: harness.lock_version,
     })
@@ -363,5 +420,58 @@ mod tests {
         // stale lock (expected=99, actual=0)
         let result = repo.append_version(&harness, &new_bv, 99).await;
         assert!(matches!(result, Err(CoreError::LockConflict { .. })));
+    }
+
+    // ── rename_cell ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_cell_changes_name_only_and_bumps_version() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "old".into(),
+                prompt: "p".into(),
+                status: CellStatus::Active,
+                terminal: false,
+            }],
+            edges: vec![],
+        };
+        let out = create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+        )
+        .await
+        .unwrap();
+
+        let (mut harness, head) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        let lv = harness.lock_version;
+        let mut new_def = head.definition.clone();
+        let cell = new_def.cells.iter_mut().find(|c| c.id == "c1").unwrap();
+        cell.name = "new".into();
+        let new_version_no = harness.current_version + 1;
+        let new_bv = BoardVersion {
+            id: "bv-rn".into(),
+            harness_id: harness.id.clone(),
+            version_no: new_version_no,
+            content_hash: content_hash(&new_def),
+            definition: new_def.clone(),
+            created_at: "2026-01-01T00:00:00+09:00".into(),
+        };
+        harness.current_version = new_version_no;
+        harness.lock_version = lv + 1;
+        repo.append_version(&harness, &new_bv, lv).await.unwrap();
+
+        let (h2, bv2) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        let c1 = bv2.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(c1.name, "new");
+        assert_eq!(c1.prompt, "p"); // prompt 不変
+        assert_eq!(c1.id, "c1");     // id 不変
+        assert_eq!(h2.current_version, 2);
+        assert_eq!(h2.lock_version, lv + 1);
     }
 }
