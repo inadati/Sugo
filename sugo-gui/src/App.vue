@@ -1,9 +1,12 @@
 <template>
   <div class="min-h-screen bg-gray-50">
-    <header class="bg-white border-b border-gray-200 px-6 py-3 flex justify-center items-center">
-      <h1 class="text-sm font-bold text-gray-800 cursor-pointer select-none" @click="router.push('/')">
+    <header
+      class="bg-white border-b border-gray-200 h-[28px] flex justify-center items-center select-none"
+      data-tauri-drag-region
+    >
+      <span class="text-xs font-bold text-gray-600 cursor-pointer" @click="router.push('/')">
         Sugo {{ version }}
-      </h1>
+      </span>
     </header>
     <main class="p-6">
       <RouterView />
