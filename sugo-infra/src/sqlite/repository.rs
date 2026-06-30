@@ -287,7 +287,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         tx.execute("DELETE FROM runs WHERE harness_id = ?1", [id])
             .map_err(map_err)?;
         let affected = tx
-            .execute("DELETE FROM harnesses WHERE id = ?1", [id])
+            .execute("DELETE FROM harnesses WHERE id = ?1 AND deleted_at IS NOT NULL", [id])
             .map_err(map_err)?;
         if affected == 0 {
             return Err(CoreError::NotFound(id.to_string()));
@@ -380,7 +380,7 @@ fn row_to_harness(row: &rusqlite::Row) -> rusqlite::Result<Harness> {
 
 fn select_harness(conn: &Connection, id: &str) -> Result<Option<Harness>, CoreError> {
     conn.query_row(
-        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses WHERE id=?1",
+        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
         [id],
         row_to_harness,
     )
