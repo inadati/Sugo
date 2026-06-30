@@ -99,7 +99,7 @@ async function doTrash() {
     await fetchHarnesses();
   } catch (e: unknown) {
     trashError.value =
-      e === "active_run"
+      String(e).includes("active_run")
         ? "実行中のRunがあるため移動できません"
         : String(e);
   }
