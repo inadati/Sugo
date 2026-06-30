@@ -1,4 +1,4 @@
-use crate::dto::{ActiveRunDto, AddCellResultDto, CellDto, DeleteCellResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto};
+use crate::dto::{ActiveRunDto, AddCellResultDto, CellDto, DeleteCellResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::harness::BoardVersion;
@@ -341,9 +341,114 @@ pub async fn get_active_runs(
     Ok(active)
 }
 
+pub(crate) async fn trash_harness_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    deleted_at: String,
+) -> Result<(), String> {
+    repo.trash_harness(&harness_id, &deleted_at)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn restore_harness_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+) -> Result<(), String> {
+    repo.restore_harness(&harness_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn purge_harness_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+) -> Result<(), String> {
+    repo.purge_harness(&harness_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// ハーネスをゴミ箱に移動する。アクティブ Run が存在する場合は `"active_run"` エラーを返す。
+#[tauri::command]
+pub async fn trash_harness(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<(), String> {
+    // アクティブ Run チェック（get_active_runs と同じ判定）
+    let runs = state
+        .run_repo
+        .list_by_harness(&harness_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now();
+    let stale_secs = chrono::Duration::seconds(300);
+    let has_active = runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Running)
+        .any(|r| {
+            let ts = r.last_heartbeat_at.as_deref().unwrap_or(&r.updated_at);
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| {
+                    now.signed_duration_since(dt.with_timezone(&chrono::Utc)) < stale_secs
+                })
+                .unwrap_or(false)
+        });
+    if has_active {
+        return Err("active_run".to_string());
+    }
+    let deleted_at = chrono::Local::now().to_rfc3339();
+    trash_harness_inner(state.repo.as_ref(), harness_id, deleted_at).await
+}
+
+/// ゴミ箱からハーネスを復活させる。
+#[tauri::command]
+pub async fn restore_harness(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<(), String> {
+    restore_harness_inner(state.repo.as_ref(), harness_id).await
+}
+
+/// ハーネスを物理削除する（ゴミ箱からのみ呼ぶ）。
+#[tauri::command]
+pub async fn purge_harness(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<(), String> {
+    purge_harness_inner(state.repo.as_ref(), harness_id).await
+}
+
+/// ゴミ箱一覧取得（残り日数付き）。
+#[tauri::command]
+pub async fn list_trash(
+    state: State<'_, AppState>,
+) -> Result<Vec<TrashItemDto>, String> {
+    let items = state.repo.list_trash().await.map_err(|e| e.to_string())?;
+    let now = chrono::Local::now();
+    Ok(items
+        .into_iter()
+        .map(|(id, name, deleted_at)| {
+            let remaining_days = chrono::DateTime::parse_from_rfc3339(&deleted_at)
+                .map(|dt| {
+                    let elapsed =
+                        now.signed_duration_since(dt.with_timezone(&chrono::Local));
+                    (180 - elapsed.num_days()).max(0)
+                })
+                .unwrap_or(0);
+            TrashItemDto {
+                harness_id: id,
+                name,
+                deleted_at,
+                remaining_days,
+            }
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, delete_cell_inner, rename_cell_inner};
+    use super::{add_cell_inner, delete_cell_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -664,5 +769,70 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, "not_draft");
+    }
+
+    // ── trash_harness（inner）────────────────────────────────────────────────
+
+    async fn seed_harness(repo: &InMemoryHarnessRepository) -> String {
+        let clock = FakeIdClock::new();
+        create_harness(
+            repo,
+            &clock,
+            CreateHarnessInput { name: "h".into(), definition: None },
+        )
+        .await
+        .unwrap()
+        .harness_id
+    }
+
+    #[tokio::test]
+    async fn trash_harness_inner_moves_harness_to_trash() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_harness(&repo).await;
+
+        trash_harness_inner(&repo, hid.clone(), "2026-06-30T10:00:00+09:00".into())
+            .await
+            .unwrap();
+        // list() excludes trashed
+        assert!(repo.list().await.unwrap().is_empty());
+        // list_trash() includes it
+        let trash = repo.list_trash().await.unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].0, hid);
+    }
+
+    #[tokio::test]
+    async fn trash_harness_inner_unknown_returns_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = trash_harness_inner(&repo, "ghost".into(), "2026-06-30T10:00:00+09:00".into())
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn restore_harness_inner_moves_back_to_active() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_harness(&repo).await;
+        repo.trash_harness(&hid, "2026-06-30T10:00:00+09:00")
+            .await
+            .unwrap();
+
+        restore_harness_inner(&repo, hid.clone()).await.unwrap();
+        assert_eq!(repo.list().await.unwrap().len(), 1);
+        assert!(repo.list_trash().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn purge_harness_inner_removes_harness() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_harness(&repo).await;
+        repo.trash_harness(&hid, "2026-06-30T10:00:00+09:00")
+            .await
+            .unwrap();
+
+        purge_harness_inner(&repo, hid.clone()).await.unwrap();
+        assert!(repo.list_trash().await.unwrap().is_empty());
+        assert!(repo.get(&hid).await.unwrap().is_none());
     }
 }

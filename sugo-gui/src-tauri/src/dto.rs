@@ -67,3 +67,11 @@ pub struct ActiveRunDto {
     pub current_cell_id: String,
     pub project_path: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TrashItemDto {
+    pub harness_id: String,
+    pub name: String,
+    pub deleted_at: String,
+    pub remaining_days: i64,
+}
