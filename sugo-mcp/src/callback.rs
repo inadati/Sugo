@@ -34,6 +34,11 @@ struct SessionEventReq {
     reason: String,
 }
 
+#[derive(Deserialize)]
+struct InjectAckReq {
+    run_id: String,
+}
+
 /// Map a Nipper session-event reason to the new run status, or None to ignore.
 pub fn status_for_reason(reason: &str) -> Option<RunStatus> {
     match reason {
@@ -46,6 +51,11 @@ pub fn status_for_reason(reason: &str) -> Option<RunStatus> {
 async fn handle_heartbeat(State(st): State<CallbackState>, Json(req): Json<HeartbeatReq>) -> Json<Value> {
     let now = st.clock.now_iso();
     let _ = st.run_repo.update_heartbeat(&req.run_id, &now).await;
+    Json(json!({ "status": "ok" }))
+}
+
+async fn handle_inject_ack(State(st): State<CallbackState>, Json(req): Json<InjectAckReq>) -> Json<Value> {
+    let _ = st.run_repo.set_inject_pending(&req.run_id, None).await;
     Json(json!({ "status": "ok" }))
 }
 
@@ -64,6 +74,7 @@ async fn handle_session_event(State(st): State<CallbackState>, Json(req): Json<S
 pub fn router(state: CallbackState) -> Router {
     Router::new()
         .route("/heartbeat", post(handle_heartbeat))
+        .route("/inject-ack", post(handle_inject_ack))
         .route("/session-event", post(handle_session_event))
         .with_state(state)
 }
@@ -110,7 +121,7 @@ mod tests {
             Run { id: "r1".into(), harness_id: "h1".into(), board_version_no: 1,
                 current_cell_id: "c1".into(), status: RunStatus::Running,
                 project_path: Some("/p".into()), created_at: "t".into(), updated_at: "t".into(),
-                last_heartbeat_at: None }
+                last_heartbeat_at: None, inject_pending_since: None }
         }).await.unwrap();
         let _ = handle_heartbeat(State(st.clone()), Json(HeartbeatReq { run_id: "r1".into() })).await;
         let got = st.run_repo.get("r1").await.unwrap().unwrap();
@@ -125,7 +136,7 @@ mod tests {
             Run { id: "r1".into(), harness_id: "h1".into(), board_version_no: 1,
                 current_cell_id: "c1".into(), status: RunStatus::Running,
                 project_path: Some("/p".into()), created_at: "t".into(), updated_at: "t".into(),
-                last_heartbeat_at: None }
+                last_heartbeat_at: None, inject_pending_since: None }
         }).await.unwrap();
         let _ = handle_session_event(State(st.clone()), Json(SessionEventReq { run_id: "r1".into(), reason: "user_closed".into() })).await;
         let got = st.run_repo.get("r1").await.unwrap().unwrap();

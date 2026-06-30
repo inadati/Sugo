@@ -14,6 +14,8 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use std::sync::Arc;
+use sugo_core::ports::id_clock::IdClock;
+use sugo_core::ports::run_repository::RunRepository;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 use sugo_infra::sqlite::SqliteRunRepository;
 use tools::RealIdClock;
@@ -296,6 +298,8 @@ impl SugoServer {
         if let Some(e) = error::nipper_outcome_error(inj) {
             return Err(e);
         }
+        // Mark inject pending; cleared when Nipper calls /inject-ack.
+        let _ = self.run_repo.set_inject_pending(&out.run_id, Some(&self.clock.now_iso())).await;
 
         let edges: Vec<serde_json::Value> = out.edges.iter().map(|e| {
             let mut obj = serde_json::json!({
@@ -326,8 +330,17 @@ impl SugoServer {
         &self,
         Parameters(args): Parameters<tools::AdvanceArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        use sugo_core::ports::run_repository::RunRepository;
         use sugo_core::usecase::advance_run::{AdvanceRunInput, advance_run};
+
+        // Inject gate: block if previous inject has not yet been acknowledged by Nipper.
+        if let Ok(Some(run)) = self.run_repo.get(&args.run_id).await {
+            if run.inject_pending_since.is_some() {
+                return Err(ErrorData::invalid_params(
+                    "inject pending: Nipper has not yet acknowledged the previous inject; retry after /inject-ack",
+                    Some(serde_json::json!({ "code": "inject_pending" })),
+                ));
+            }
+        }
 
         let run_id_for_lookup = args.run_id.clone();
         let out = advance_run(
@@ -349,6 +362,9 @@ impl SugoServer {
             }
             if out.terminal {
                 let _ = nipper_client::detach(&self.nipper_base, pp).await;
+            } else {
+                // Mark inject pending; cleared when Nipper calls /inject-ack.
+                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso())).await;
             }
         }
 

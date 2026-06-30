@@ -3141,10 +3141,11 @@ dependencies = [
 
 [[package]]
 name = "sugo-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "rusqlite",
  "serde",
  "serde_json",
  "sugo-core",

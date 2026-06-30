@@ -1,9 +1,11 @@
-use crate::dto::{AddCellResultDto, CellDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto};
+use crate::dto::{ActiveRunDto, AddCellResultDto, CellDto, DeleteCellResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::harness::BoardVersion;
+use sugo_core::domain::run::RunStatus;
 use sugo_core::error::CoreError;
 use sugo_core::ports::repository::HarnessRepository;
+use sugo_core::ports::run_repository::RunRepository;
 use sugo_core::usecase::create_harness::content_hash;
 use sugo_core::usecase::get_status::get_status;
 use tauri::State;
@@ -238,9 +240,110 @@ async fn rename_cell_inner(
     })
 }
 
+/// draft マスを削除する（楽観ロック付き）。
+/// draft 以外のマスや、そのマスへの参照エッジも同時に除去する。
+#[tauri::command]
+pub async fn delete_cell(
+    state: State<'_, AppState>,
+    harness_id: String,
+    cell_id: String,
+    lock_version: i64,
+) -> Result<DeleteCellResultDto, String> {
+    delete_cell_inner(state.repo.as_ref(), harness_id, cell_id, lock_version).await
+}
+
+async fn delete_cell_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    cell_id: String,
+    lock_version: i64,
+) -> Result<DeleteCellResultDto, String> {
+    let (mut harness, head) = repo
+        .get(&harness_id)
+        .await
+        .map_err(map_core_error)?
+        .ok_or_else(|| CoreError::NotFound(harness_id.clone()).to_string())?;
+
+    let mut new_def = head.definition.clone();
+
+    let cell = new_def
+        .cells
+        .iter()
+        .find(|c| c.id == cell_id)
+        .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
+
+    if cell.status != CellStatus::Draft {
+        return Err("not_draft".to_string());
+    }
+
+    new_def.cells.retain(|c| c.id != cell_id);
+    new_def.edges.retain(|e| e.from != cell_id && e.to != cell_id);
+
+    let new_version_no = harness.current_version + 1;
+    let now = chrono::Local::now().to_rfc3339();
+    let new_version = BoardVersion {
+        id: uuid::Uuid::new_v4().to_string(),
+        harness_id: harness_id.clone(),
+        version_no: new_version_no,
+        content_hash: content_hash(&new_def),
+        definition: new_def.clone(),
+        created_at: now.clone(),
+    };
+
+    harness.current_version = new_version_no;
+    harness.has_draft = new_def.cells.iter().any(|c| c.status == CellStatus::Draft);
+    harness.lock_version = lock_version + 1;
+    harness.updated_at = now;
+
+    repo.append_version(&harness, &new_version, lock_version)
+        .await
+        .map_err(map_core_error)?;
+
+    Ok(DeleteCellResultDto {
+        new_version: new_version_no,
+        lock_version: harness.lock_version,
+    })
+}
+
+/// 指定ハーネスのアクティブ実行（status = running かつ直近300秒以内にハートビートあり）を返す。
+/// project_path の末尾コンポーネントが Nipper タブ名になる。
+#[tauri::command]
+pub async fn get_active_runs(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<Vec<ActiveRunDto>, String> {
+    let runs = state
+        .run_repo
+        .list_by_harness(&harness_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let now = chrono::Utc::now();
+    let stale_secs = chrono::Duration::seconds(300);
+
+    let active = runs
+        .into_iter()
+        .filter(|r| r.status == RunStatus::Running)
+        .filter(|r| {
+            // last_heartbeat_at がなければ updated_at を代用して鮮度確認
+            let ts = r.last_heartbeat_at.as_deref().unwrap_or(&r.updated_at);
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| now.signed_duration_since(dt.with_timezone(&chrono::Utc)) < stale_secs)
+                .unwrap_or(false)
+        })
+        .map(|r| ActiveRunDto {
+            run_id: r.id,
+            current_cell_id: r.current_cell_id,
+            project_path: r.project_path,
+        })
+        .collect();
+
+    Ok(active)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, rename_cell_inner};
+    use super::{add_cell_inner, delete_cell_inner, rename_cell_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -521,5 +624,45 @@ mod tests {
     fn map_core_error_lock_conflict_is_stable_code() {
         let e = CoreError::LockConflict { expected: 1, actual: 2 };
         assert_eq!(super::map_core_error(e), "lock_conflict");
+    }
+
+    #[tokio::test]
+    async fn delete_cell_inner_removes_draft_cell_and_edges() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        // draft セルを追加してから削除する
+        let add_res = add_cell_inner(&repo, hid.clone(), "draft-cell".into(), 0)
+            .await
+            .unwrap();
+        let (_, bv1) = repo.get(&hid).await.unwrap().unwrap();
+        let draft_id = bv1
+            .definition
+            .cells
+            .iter()
+            .find(|c| c.name == "draft-cell")
+            .unwrap()
+            .id
+            .clone();
+
+        let del_res = delete_cell_inner(&repo, hid.clone(), draft_id.clone(), add_res.lock_version)
+            .await
+            .unwrap();
+        assert_eq!(del_res.new_version, add_res.new_version + 1);
+
+        let (h, bv2) = repo.get(&hid).await.unwrap().unwrap();
+        assert!(!bv2.definition.cells.iter().any(|c| c.id == draft_id));
+        assert!(!h.has_draft);
+    }
+
+    #[tokio::test]
+    async fn delete_cell_inner_rejects_non_draft_cell() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        let err = delete_cell_inner(&repo, hid, "c1".into(), 0)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "not_draft");
     }
 }

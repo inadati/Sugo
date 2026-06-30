@@ -90,6 +90,20 @@ impl SqliteHarnessRepository {
             conn.execute("ALTER TABLE runs ADD COLUMN last_heartbeat_at TEXT", [])
                 .map_err(map_err)?;
         }
+        // Idempotent migration for inject_pending_since (inject lock gate, added 2026-06).
+        let has_inject_col: bool = conn
+            .prepare("PRAGMA table_info(runs)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "inject_pending_since"))
+            })
+            .map_err(map_err)?;
+        if !has_inject_col {
+            conn.execute("ALTER TABLE runs ADD COLUMN inject_pending_since TEXT", [])
+                .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })

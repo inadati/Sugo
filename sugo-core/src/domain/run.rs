@@ -45,4 +45,7 @@ pub struct Run {
     /// Last time a Nipper heartbeat was received for this run (RFC3339). None until first heartbeat.
     pub last_heartbeat_at: Option<String>,
     pub updated_at: String,
+    /// Set to the timestamp when the last inject was sent; cleared by /inject-ack from Nipper.
+    /// sugo_advance is blocked while this is Some (inject gate).
+    pub inject_pending_since: Option<String>,
 }

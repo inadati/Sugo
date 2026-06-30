@@ -38,6 +38,17 @@
     <!-- プロンプト閲覧 -->
     <label class="block text-xs text-gray-500 mb-1">プロンプト</label>
     <pre class="text-sm bg-gray-50 border border-gray-200 rounded p-3 whitespace-pre-wrap break-words">{{ cell.prompt || "（未登録）" }}</pre>
+
+    <!-- ドラフト削除 -->
+    <div v-if="cell.status === 'draft'" class="mt-6 border-t border-gray-100 pt-4">
+      <button
+        data-testid="cell-delete"
+        class="w-full px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100 disabled:opacity-50 text-sm"
+        :disabled="deleting"
+        @click="deleteCell"
+      >このマスを削除</button>
+      <p v-if="deleteErrorMsg" class="text-red-500 text-sm mt-1">{{ deleteErrorMsg }}</p>
+    </div>
   </div>
 </template>
 
@@ -54,16 +65,19 @@ interface CellData {
 }
 
 const props = defineProps<{ harnessId: string; cell: CellData; lockVersion: number }>();
-const emit = defineEmits<{ close: []; renamed: [newVersion: number, lockVersion: number] }>();
+const emit = defineEmits<{
+  close: [];
+  renamed: [newVersion: number, lockVersion: number];
+  deleted: [newVersion: number, lockVersion: number];
+}>();
 
 const nameDraft = ref(props.cell.name);
 const errorMsg = ref("");
 const saving = ref(false);
+const deleting = ref(false);
+const deleteErrorMsg = ref("");
 
-// 選択セルが「別のセルに切り替わった」時のみ下書きを同期する。
-// cell.id を監視キーにすることで、ポーリングによる detail 差し替え（同一セル）で
-// 編集中の入力が破棄されるのを防ぐ。
-watch(() => props.cell.id, () => { nameDraft.value = props.cell.name; errorMsg.value = ""; });
+watch(() => props.cell.id, () => { nameDraft.value = props.cell.name; errorMsg.value = ""; deleteErrorMsg.value = ""; });
 
 async function save() {
   if (!nameDraft.value.trim()) return;
@@ -88,6 +102,28 @@ async function save() {
     }
   } finally {
     saving.value = false;
+  }
+}
+
+async function deleteCell() {
+  deleting.value = true;
+  deleteErrorMsg.value = "";
+  try {
+    const result = await invoke<{ new_version: number; lock_version: number }>("delete_cell", {
+      harnessId: props.harnessId,
+      cellId: props.cell.id,
+      lockVersion: props.lockVersion,
+    });
+    emit("deleted", result.new_version, result.lock_version);
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes("lock_conflict")) {
+      deleteErrorMsg.value = "他で編集が入りました。再読み込みしてください。";
+    } else {
+      deleteErrorMsg.value = "削除に失敗しました。";
+    }
+  } finally {
+    deleting.value = false;
   }
 }
 </script>
