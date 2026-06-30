@@ -110,6 +110,8 @@ pub struct HarnessSummary {
     pub harness_id: String,
     /// Name of the harness.
     pub name: String,
+    /// Optional free-text description.
+    pub description: Option<String>,
     /// `version_no` of the current head board version.
     pub current_version: i64,
     /// Whether the current board version contains any draft cell.
@@ -126,6 +128,7 @@ pub async fn list_harness_summaries(
         .map(|h| HarnessSummary {
             harness_id: h.id,
             name: h.name,
+            description: h.description,
             current_version: h.current_version,
             has_draft: h.has_draft,
         })
@@ -172,7 +175,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();
@@ -227,7 +230,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();
@@ -298,7 +301,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();
@@ -365,7 +368,7 @@ mod tests {
             create_harness(
                 &repo,
                 &clock,
-                CreateHarnessInput { name: n.into(), definition: None },
+                CreateHarnessInput { name: n.into(), description: None, definition: None },
             )
             .await
             .unwrap();

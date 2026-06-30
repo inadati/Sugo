@@ -40,7 +40,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: None },
+            CreateHarnessInput { name: "h".into(), description: None, definition: None },
         )
         .await
         .unwrap();
@@ -76,7 +76,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();

@@ -97,6 +97,7 @@ mod helpers {
         Harness {
             id: id.into(),
             name: "h".into(),
+            description: None,
             current_version,
             has_draft: false,
             lock_version,

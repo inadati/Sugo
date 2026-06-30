@@ -65,6 +65,8 @@ pub trait HarnessRepository: Send + Sync {
     async fn list_trash(&self) -> Result<Vec<(String, String, String)>, CoreError>;
     /// `before_iso` より前にゴミ箱に入ったハーネスを自動物理削除する。
     async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError>;
+    /// ハーネスの説明文を更新する（description カラムのみ更新、ボードバージョンは変更しない）。
+    async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError>;
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -285,6 +287,13 @@ pub mod fake {
             for id in to_purge {
                 self.purge_harness(&id).await?;
             }
+            Ok(())
+        }
+
+        async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError> {
+            let mut hs = self.harnesses.lock().unwrap();
+            let h = hs.get_mut(id).ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+            h.description = description.map(|s| s.to_string());
             Ok(())
         }
     }
