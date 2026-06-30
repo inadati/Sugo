@@ -289,12 +289,11 @@ impl HarnessRepository for SqliteHarnessRepository {
         let affected = tx
             .execute("DELETE FROM harnesses WHERE id = ?1", [id])
             .map_err(map_err)?;
-        tx.commit().map_err(map_err)?;
         if affected == 0 {
-            Err(CoreError::NotFound(id.to_string()))
-        } else {
-            Ok(())
+            return Err(CoreError::NotFound(id.to_string()));
         }
+        tx.commit().map_err(map_err)?;
+        Ok(())
     }
 
     async fn list_trash(&self) -> Result<Vec<(String, String, String)>, CoreError> {
