@@ -93,10 +93,16 @@ pub fn router(state: CallbackState) -> Router {
         .with_state(state)
 }
 
-/// Bind an ephemeral local port and start the callback server.
-/// Returns the callback base URL (e.g. "http://127.0.0.1:54321").
+/// Fixed port for the Sugo callback server.
+/// Must be stable across restarts so Nipper's stored callback URLs remain valid.
+pub const CALLBACK_PORT: u16 = 8772;
+
+/// Bind the fixed callback port and start the callback server.
+/// Returns the callback base URL (e.g. "http://127.0.0.1:8772").
+/// Fails if port 8772 is already in use (e.g. a previous instance still running).
 pub async fn start(state: CallbackState) -> anyhow::Result<String> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{CALLBACK_PORT}")).await
+        .map_err(|e| anyhow::anyhow!("failed to bind callback port {CALLBACK_PORT}: {e} (is a previous sugo-mcp still running?)"))?;
     let addr = listener.local_addr()?;
     let app = router(state);
     tokio::spawn(async move {

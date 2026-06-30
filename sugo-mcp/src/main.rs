@@ -263,10 +263,11 @@ impl SugoServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    /// Start a harness run and return the first cell's prompt and outgoing edges.
+    /// Start a harness run and inject the first cell's prompt into the Nipper message queue.
     #[tool(description = "Start a harness run. Fails with draft_cells_exist if any cell is a \
-        draft. Returns { run_id, cell_name, prompt, edges: [{label, to_cell_id, to_cell_name, \
-        guard?}] }.")]
+        draft. Injects the first cell's prompt (with available edges and run_id) into the \
+        Nipper message queue as the next user turn. Returns { run_id } only — the prompt and \
+        edges arrive exclusively via Nipper; do NOT act on them in this turn.")]
     async fn sugo_start(
         &self,
         Parameters(args): Parameters<tools::StartArgs>,
@@ -295,38 +296,30 @@ impl SugoServer {
         if let Some(e) = error::nipper_outcome_error(att) {
             return Err(e);
         }
-        let inj = nipper_client::inject(&self.nipper_base, &project_path, &out.prompt).await;
+        // Build the inject text: prompt + routing footer (run_id + edges).
+        // Prompt and edges are intentionally NOT returned in the MCP response so that
+        // Claude must wait for the Nipper-injected turn before acting on them.
+        let inject_text = build_inject_text(&out.prompt, &out.run_id, &out.edges, out.edges.is_empty());
+        // Mark inject pending before calling inject to avoid a race where Nipper's
+        // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
+        let _ = self.run_repo.set_inject_pending(&out.run_id, Some(&self.clock.now_iso())).await;
+        let inj = nipper_client::inject(&self.nipper_base, &project_path, &inject_text).await;
         if let Some(e) = error::nipper_outcome_error(inj) {
+            let _ = self.run_repo.set_inject_pending(&out.run_id, None).await;
             return Err(e);
         }
-        // Mark inject pending; cleared when Nipper calls /inject-ack.
-        let _ = self.run_repo.set_inject_pending(&out.run_id, Some(&self.clock.now_iso())).await;
 
-        let edges: Vec<serde_json::Value> = out.edges.iter().map(|e| {
-            let mut obj = serde_json::json!({
-                "label": e.label,
-                "to_cell_id": e.to_cell_id,
-                "to_cell_name": e.to_cell_name,
-            });
-            if let Some(g) = &e.guard {
-                obj["guard"] = serde_json::json!(g);
-            }
-            obj
-        }).collect();
-
-        let payload = serde_json::json!({
-            "run_id": out.run_id,
-            "cell_name": out.cell_name,
-            "prompt": out.prompt,
-            "edges": edges,
-        });
+        let payload = serde_json::json!({ "run_id": out.run_id });
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
 
-    /// Advance a run along the given edge label to the next cell.
-    #[tool(description = "Advance a run along edge_label from the current cell. Returns \
-        { cell_name, prompt, terminal, edges: [{label, to_cell_id, to_cell_name, guard?}] }. \
-        terminal=true means the run is complete.")]
+    /// Advance a run along the given edge label and inject the next cell's prompt into Nipper.
+    #[tool(description = "Advance a run along edge_label from the current cell. Injects the \
+        next cell's prompt (with available edges and run_id) into the Nipper message queue as \
+        the next user turn. Returns { ok, terminal } only — the next prompt and edges arrive \
+        exclusively via Nipper; do NOT act on them in this turn. terminal=true means the run \
+        is complete. Blocked with inject_pending if Nipper has not yet delivered the previous \
+        inject.")]
     async fn sugo_advance(
         &self,
         Parameters(args): Parameters<tools::AdvanceArgs>,
@@ -334,11 +327,32 @@ impl SugoServer {
         use sugo_core::usecase::advance_run::{AdvanceRunInput, advance_run};
 
         // Inject gate: block if previous inject has not yet been acknowledged by Nipper.
-        if let Ok(Some(run)) = self.run_repo.get(&args.run_id).await {
-            if run.inject_pending_since.is_some() {
+        // After 30 s without an ack the inject is considered lost; mark the run Stalled
+        // so the caller gets a hard error instead of being blocked forever.
+        const INJECT_TIMEOUT_SECS: i64 = 30;
+        if let Ok(Some(mut run)) = self.run_repo.get(&args.run_id).await {
+            if let Some(ref pending_since) = run.inject_pending_since {
+                let elapsed = chrono::DateTime::parse_from_rfc3339(pending_since)
+                    .ok()
+                    .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds())
+                    .unwrap_or(0)
+                    .max(0);
+                if elapsed < INJECT_TIMEOUT_SECS {
+                    return Err(ErrorData::invalid_params(
+                        "inject pending: Nipper has not yet acknowledged the previous inject; retry after /inject-ack",
+                        Some(serde_json::json!({ "code": "inject_pending" })),
+                    ));
+                }
+                // Timeout: ack never arrived — mark run Stalled and fail hard.
+                run.status = sugo_core::domain::run::RunStatus::Stalled;
+                run.updated_at = self.clock.now_iso();
+                let _ = self.run_repo.update(&run).await;
                 return Err(ErrorData::invalid_params(
-                    "inject pending: Nipper has not yet acknowledged the previous inject; retry after /inject-ack",
-                    Some(serde_json::json!({ "code": "inject_pending" })),
+                    format!(
+                        "inject timeout: Nipper did not acknowledge the inject after {elapsed}s. \
+                         The run is now Stalled. Call sugo_start to begin a new run."
+                    ),
+                    Some(serde_json::json!({ "code": "inject_timeout" })),
                 ));
             }
         }
@@ -354,38 +368,30 @@ impl SugoServer {
         .map_err(error::to_tool_error)?;
 
         // Inject the next cell's prompt into the attached Nipper session.
+        // Prompt and edges are intentionally NOT returned in the MCP response so that
+        // Claude must wait for the Nipper-injected turn before acting on them.
         if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await
             && let Some(pp) = run.project_path.as_deref()
         {
-            let inj = nipper_client::inject(&self.nipper_base, pp, &out.prompt).await;
+            let inject_text = build_inject_text(&out.prompt, &run_id_for_lookup, &out.edges, out.terminal);
+            // Mark inject pending before calling inject to avoid a race where Nipper's
+            // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
+            if !out.terminal {
+                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso())).await;
+            }
+            let inj = nipper_client::inject(&self.nipper_base, pp, &inject_text).await;
             if let Some(e) = error::nipper_outcome_error(inj) {
+                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, None).await;
                 return Err(e);
             }
             if out.terminal {
                 let _ = nipper_client::detach(&self.nipper_base, pp).await;
-            } else {
-                // Mark inject pending; cleared when Nipper calls /inject-ack.
-                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso())).await;
             }
         }
 
-        let edges: Vec<serde_json::Value> = out.edges.iter().map(|e| {
-            let mut obj = serde_json::json!({
-                "label": e.label,
-                "to_cell_id": e.to_cell_id,
-                "to_cell_name": e.to_cell_name,
-            });
-            if let Some(g) = &e.guard {
-                obj["guard"] = serde_json::json!(g);
-            }
-            obj
-        }).collect();
-
         let payload = serde_json::json!({
-            "cell_name": out.cell_name,
-            "prompt": out.prompt,
+            "ok": true,
             "terminal": out.terminal,
-            "edges": edges,
         });
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
@@ -464,19 +470,52 @@ impl SugoServer {
     }
 }
 
+/// Build the text injected into Nipper for each cell turn.
+///
+/// The prompt is the cell's instruction. A routing footer is appended so
+/// Claude knows which run_id and edge labels to use — these are the ONLY
+/// way Claude receives this information; they are never returned in MCP
+/// responses, forcing Claude to wait for the Nipper-injected turn.
+fn build_inject_text(
+    prompt: &str,
+    run_id: &str,
+    edges: &[sugo_core::usecase::start_run::EdgeInfo],
+    terminal: bool,
+) -> String {
+    if terminal {
+        format!(
+            "{}\n\n---\n【Sugo ハーネス】このセルは終端です。ハーネスの実行が完了しました。\nrun_id: {}",
+            prompt, run_id
+        )
+    } else {
+        let edge_lines: Vec<String> = edges
+            .iter()
+            .map(|e| match &e.guard {
+                Some(g) => format!("  - \"{}\" (条件: {}) → {}", e.label, g, e.to_cell_name),
+                None => format!("  - \"{}\" → {}", e.label, e.to_cell_name),
+            })
+            .collect();
+        format!(
+            "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を呼んでください。\nrun_id: {}\n選択できるエッジ:\n{}",
+            prompt, run_id, edge_lines.join("\n")
+        )
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SugoServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(
             "Sugo harness MCP server. Tools: sugo_create_harness, sugo_status, \
-             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance. \
-             Editing a cell always produces a new immutable board version guarded \
-             by an optimistic lock. sugo_start begins a run and returns the first \
-             cell's prompt; sugo_advance follows an edge to the next cell; \
-             sugo_update_harness batch-updates cells and edges in one new board version. \
-             sugo_start requires project_path and connects the run to the live Nipper chat \
-             session (127.0.0.1:8771), injecting each cell's prompt as the run advances."
+             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_update_harness. \
+             Editing a cell always produces a new immutable board version guarded by an optimistic lock. \
+             sugo_start begins a run and injects the first cell's prompt into the Nipper message queue; \
+             sugo_advance follows an edge and injects the next cell's prompt into Nipper. \
+             IMPORTANT: sugo_start and sugo_advance return NO prompt or edges in their MCP response. \
+             The prompt, available edges, and run_id arrive exclusively as the next Nipper-injected \
+             message. Claude must wait for that message before acting — never process harness content \
+             in the same turn as a sugo_start/sugo_advance call."
                 .to_string(),
         );
         info
@@ -891,6 +930,61 @@ mod tests {
         let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run.current_cell_id, "c2");
         assert_eq!(run.status, sugo_core::domain::run::RunStatus::Done);
+    }
+
+    #[tokio::test]
+    async fn sugo_advance_inject_pending_within_timeout_blocks() {
+        // inject_pending_since set to now (< 30 s) → inject_pending error.
+        use sugo_core::domain::edge::Edge;
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let two_cell = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+            ],
+            edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
+        };
+        let id = create_harness(&srv, "h", Some(two_cell)).await;
+        let run_id = seed_run(&srv, &id).await;
+        let now_ts = chrono::Utc::now().to_rfc3339();
+        let _ = srv.run_repo.set_inject_pending(&run_id, Some(&now_ts)).await;
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs { run_id, edge_label: "next".into() }))
+            .await
+            .expect_err("inject_pending must block advance");
+        assert_eq!(error_code(&err), "inject_pending");
+    }
+
+    #[tokio::test]
+    async fn sugo_advance_inject_timeout_marks_run_stalled() {
+        // inject_pending_since set to 60 s ago (> 30 s) → inject_timeout + Stalled.
+        use sugo_core::domain::edge::Edge;
+        use sugo_core::domain::run::RunStatus;
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let two_cell = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+            ],
+            edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
+        };
+        let id = create_harness(&srv, "h", Some(two_cell)).await;
+        let run_id = seed_run(&srv, &id).await;
+        let old_ts = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
+        let _ = srv.run_repo.set_inject_pending(&run_id, Some(&old_ts)).await;
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs { run_id: run_id.clone(), edge_label: "next".into() }))
+            .await
+            .expect_err("inject_timeout must reject");
+        assert_eq!(error_code(&err), "inject_timeout");
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Stalled);
     }
 
     #[tokio::test]
