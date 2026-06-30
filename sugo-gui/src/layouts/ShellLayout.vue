@@ -1,7 +1,7 @@
 <template>
   <div class="flex h-full overflow-hidden">
     <AppSidebar />
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-auto">
       <RouterView />
     </div>
   </div>

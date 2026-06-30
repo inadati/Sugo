@@ -4,6 +4,7 @@
 //! `sugo-core` use case against a `SqliteHarnessRepository`, and serialises the
 //! result. Domain errors are mapped to tool errors via [`error::to_tool_error`].
 
+mod advance_reminder;
 mod callback;
 mod error;
 mod nipper_client;
@@ -497,13 +498,14 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("open run_repo DB: {e}"))?;
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
 
+    let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
     // Start the per-process callback server on an ephemeral port.
     let callback_state = callback::CallbackState {
         run_repo: run_repo.clone(),
         clock: Arc::new(RealIdClock),
+        nipper_base: nipper_base.clone(),
     };
     let callback_url = callback::start(callback_state).await?;
-    let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
 
     let server = SugoServer::new(harness_repo, run_repo, callback_url, nipper_base);
     let service = server.serve(stdio()).await?;

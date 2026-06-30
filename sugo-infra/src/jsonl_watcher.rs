@@ -56,6 +56,45 @@ pub fn check_stall(project_path: &str, timeout_secs: u64) -> StallInfo {
     }
 }
 
+/// Return true if any jsonl file whose records have "cwd": project_path contains
+/// an "assistant" entry with a timestamp strictly after `since_iso` (ISO 8601, UTC).
+/// ISO 8601 UTC strings are lexicographically ordered, so plain string comparison works.
+pub fn has_assistant_entry_since(project_path: &str, since_iso: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let projects_dir = Path::new(&home).join(".claude").join("projects");
+
+    let Ok(entries) = std::fs::read_dir(&projects_dir) else { return false };
+
+    for entry in entries.flatten() {
+        let subdir = entry.path();
+        if !subdir.is_dir() { continue; }
+        let Ok(files) = std::fs::read_dir(&subdir) else { continue };
+        for file_entry in files.flatten() {
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue; }
+            let Ok(contents) = std::fs::read_to_string(&path) else { continue };
+            let lines: Vec<_> = contents.lines().collect();
+            let matches_cwd = lines.iter().any(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v.get("cwd").and_then(|c| c.as_str()).map(|c| c == project_path))
+                    .unwrap_or(false)
+            });
+            if !matches_cwd { continue; }
+            let found = lines.iter().any(|line| {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return false };
+                if v.get("type").and_then(|t| t.as_str()) != Some("assistant") { return false; }
+                v.get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .map(|ts| ts > since_iso)
+                    .unwrap_or(false)
+            });
+            if found { return true; }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
