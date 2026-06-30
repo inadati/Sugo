@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 
@@ -33,10 +33,25 @@ interface HarnessSummary {
   has_draft: boolean;
 }
 
+const POLL_INTERVAL_MS = 2000;
+
 const router = useRouter();
 const harnesses = ref<HarnessSummary[]>([]);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-onMounted(async () => {
+async function fetchHarnesses() {
   harnesses.value = await invoke<HarnessSummary[]>("list_harnesses");
+}
+
+onMounted(() => {
+  void fetchHarnesses();
+  pollTimer = setInterval(fetchHarnesses, POLL_INTERVAL_MS);
+});
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 });
 </script>
