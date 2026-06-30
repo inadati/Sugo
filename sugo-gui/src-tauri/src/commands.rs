@@ -467,14 +467,14 @@ mod tests {
         create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "alpha".into(), definition: None },
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
         )
         .await
         .unwrap();
         create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "beta".into(), definition: None },
+            CreateHarnessInput { name: "beta".into(), description: None, definition: None },
         )
         .await
         .unwrap();
@@ -525,7 +525,7 @@ mod tests {
         let out = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();
@@ -556,7 +556,7 @@ mod tests {
         let out = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();
@@ -582,7 +582,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: None },
+            CreateHarnessInput { name: "h".into(), description: None, definition: None },
         )
         .await
         .unwrap();
@@ -620,7 +620,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: None },
+            CreateHarnessInput { name: "h".into(), description: None, definition: None },
         )
         .await
         .unwrap();
@@ -653,7 +653,7 @@ mod tests {
         create_harness(
             repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap()
@@ -778,7 +778,7 @@ mod tests {
         create_harness(
             repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: None },
+            CreateHarnessInput { name: "h".into(), description: None, definition: None },
         )
         .await
         .unwrap()

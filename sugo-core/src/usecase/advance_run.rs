@@ -158,7 +158,7 @@ mod tests {
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(linear_board()) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(linear_board()) },
         )
         .await
         .unwrap();
@@ -304,7 +304,7 @@ mod tests {
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "loop".into(), definition: Some(loop_board) },
+            CreateHarnessInput { name: "loop".into(), description: None, definition: Some(loop_board) },
         )
         .await
         .unwrap();
@@ -385,7 +385,7 @@ mod tests {
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "branch".into(), definition: Some(branch_board) },
+            CreateHarnessInput { name: "branch".into(), description: None, definition: Some(branch_board) },
         )
         .await
         .unwrap();

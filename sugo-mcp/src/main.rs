@@ -16,6 +16,7 @@ use rmcp::model::*;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router, transport::stdio};
 use std::sync::Arc;
 use sugo_core::ports::id_clock::IdClock;
+use sugo_core::ports::repository::HarnessRepository;
 use sugo_core::ports::run_repository::RunRepository;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 use sugo_infra::sqlite::SqliteRunRepository;
@@ -69,7 +70,7 @@ impl SugoServer {
         let out = create_harness(
             self.repo.as_ref(),
             self.clock.as_ref(),
-            CreateHarnessInput { name: args.name, definition: args.definition },
+            CreateHarnessInput { name: args.name, description: args.description, definition: args.definition },
         )
         .await
         .map_err(error::to_tool_error)?;
@@ -185,6 +186,7 @@ impl SugoServer {
                         serde_json::json!({
                             "harness_id": s.harness_id,
                             "name": s.name,
+                            "description": s.description,
                             "current_version": s.current_version,
                             "has_draft": s.has_draft,
                         })
@@ -468,6 +470,21 @@ impl SugoServer {
         });
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
+
+    /// Update a harness's description (metadata only; no new board version is created).
+    #[tool(description = "Set or clear a harness's description. Pass description=null to clear. \
+        Returns { ok: true }.")]
+    async fn sugo_set_description(
+        &self,
+        Parameters(args): Parameters<tools::SetDescriptionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.repo
+            .set_description(&args.harness_id, args.description.as_deref())
+            .await
+            .map_err(error::to_tool_error)?;
+        let payload = serde_json::json!({ "ok": true });
+        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+    }
 }
 
 /// Build the text injected into Nipper for each cell turn.
@@ -624,6 +641,7 @@ mod tests {
         let result = srv
             .sugo_create_harness(Parameters(tools::CreateArgs {
                 name: name.into(),
+                description: None,
                 definition: def,
             }))
             .await
@@ -775,6 +793,7 @@ mod tests {
         let result = srv
             .sugo_create_harness(Parameters(tools::CreateArgs {
                 name: "h".into(),
+                description: None,
                 definition: None,
             }))
             .await

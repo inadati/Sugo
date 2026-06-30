@@ -28,9 +28,22 @@ impl IdClock for RealIdClock {
 pub struct CreateArgs {
     /// Display name of the new harness.
     pub name: String,
+    /// Optional free-text description shown in harness listings.
+    #[serde(default)]
+    pub description: Option<String>,
     /// Optional board definition. When omitted a minimal template is used.
     #[serde(default)]
     pub definition: Option<BoardDefinition>,
+}
+
+/// Arguments for `sugo_set_description`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetDescriptionArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// New description text. Pass null to clear the description.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Arguments for `sugo_status`.

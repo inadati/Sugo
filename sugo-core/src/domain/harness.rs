@@ -14,6 +14,8 @@ pub struct Harness {
     pub id: String,
     /// Human-readable harness name.
     pub name: String,
+    /// Optional free-text description shown in harness listings.
+    pub description: Option<String>,
     /// `version_no` of the board version currently serving as head.
     pub current_version: i64,
     /// Whether the current board contains any draft cell.

@@ -121,6 +121,23 @@ impl SqliteHarnessRepository {
             )
             .map_err(map_err)?;
         }
+        // Idempotent migration for description (harness metadata, added 2026-06).
+        let has_description: bool = conn
+            .prepare("PRAGMA table_info(harnesses)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "description"))
+            })
+            .map_err(map_err)?;
+        if !has_description {
+            conn.execute(
+                "ALTER TABLE harnesses ADD COLUMN description TEXT",
+                [],
+            )
+            .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -170,7 +187,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at \
+                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description \
                  FROM harnesses WHERE deleted_at IS NULL",
             )
             .map_err(map_err)?;
@@ -337,11 +354,26 @@ impl HarnessRepository for SqliteHarnessRepository {
         }
         Ok(())
     }
+
+    async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError> {
+        let conn = self.lock();
+        let affected = conn
+            .execute(
+                "UPDATE harnesses SET description = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+                rusqlite::params![description, id],
+            )
+            .map_err(map_err)?;
+        if affected == 0 {
+            Err(CoreError::NotFound(id.to_string()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
     conn.execute(
-        "INSERT INTO harnesses (id,name,current_version,has_draft,lock_version,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO harnesses (id,name,current_version,has_draft,lock_version,created_at,updated_at,description) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         rusqlite::params![
             h.id,
             h.name,
@@ -349,7 +381,8 @@ fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
             h.has_draft as i64,
             h.lock_version,
             h.created_at,
-            h.updated_at
+            h.updated_at,
+            h.description
         ],
     )
     .map_err(map_err)?;
@@ -375,12 +408,13 @@ fn row_to_harness(row: &rusqlite::Row) -> rusqlite::Result<Harness> {
         lock_version: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
+        description: row.get(7)?,
     })
 }
 
 fn select_harness(conn: &Connection, id: &str) -> Result<Option<Harness>, CoreError> {
     conn.query_row(
-        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
+        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
         [id],
         row_to_harness,
     )
@@ -458,6 +492,7 @@ mod tests {
         Harness {
             id: id.into(),
             name: "h".into(),
+            description: None,
             current_version,
             has_draft: false,
             lock_version,

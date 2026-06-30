@@ -55,6 +55,7 @@ fn harness(id: &str, name: &str, current_version: i64, lock_version: i64) -> Har
     Harness {
         id: id.into(),
         name: name.into(),
+        description: None,
         current_version,
         has_draft: false,
         lock_version,

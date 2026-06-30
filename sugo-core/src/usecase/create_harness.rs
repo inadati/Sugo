@@ -48,6 +48,8 @@ pub fn default_board() -> BoardDefinition {
 pub struct CreateHarnessInput {
     /// Name to assign the new harness.
     pub name: String,
+    /// Optional free-text description.
+    pub description: Option<String>,
     /// Optional initial board; when `None`, [`default_board`] is used.
     pub definition: Option<BoardDefinition>,
 }
@@ -78,6 +80,7 @@ pub async fn create_harness(
     let harness = Harness {
         id: clock.new_id(),
         name: input.name,
+        description: input.description,
         current_version: 1,
         has_draft,
         lock_version: 0,
@@ -109,7 +112,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: None },
+            CreateHarnessInput { name: "h".into(), description: None, definition: None },
         )
         .await
         .unwrap();
@@ -145,7 +148,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def.clone()) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def.clone()) },
         )
         .await
         .unwrap();
@@ -185,7 +188,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();

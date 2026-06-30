@@ -16,6 +16,7 @@ pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS harnesses (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
+  description     TEXT,
   current_version INTEGER NOT NULL,
   has_draft       INTEGER NOT NULL,
   lock_version    INTEGER NOT NULL,

@@ -151,7 +151,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(two_cell_board()) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(two_cell_board()) },
         )
         .await
         .unwrap();
@@ -202,7 +202,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(def) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
         )
         .await
         .unwrap();

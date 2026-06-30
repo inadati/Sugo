@@ -141,7 +141,7 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), definition: Some(draft_board()) },
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(draft_board()) },
         )
         .await
         .unwrap();
