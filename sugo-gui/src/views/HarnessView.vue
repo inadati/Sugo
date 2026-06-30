@@ -1,5 +1,5 @@
 <template>
-  <div v-if="detail" class="flex flex-col h-full">
+  <div v-if="detail" class="flex flex-col h-full p-4">
     <div class="shrink-0 flex items-center justify-between mb-3">
       <div>
         <button class="text-gray-400 text-sm hover:text-gray-600 mb-1" @click="router.push('/')">← 一覧</button>
