@@ -104,6 +104,23 @@ impl SqliteHarnessRepository {
             conn.execute("ALTER TABLE runs ADD COLUMN inject_pending_since TEXT", [])
                 .map_err(map_err)?;
         }
+        // Idempotent migration for deleted_at (soft-delete trash, added 2026-06).
+        let has_deleted_at: bool = conn
+            .prepare("PRAGMA table_info(harnesses)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "deleted_at"))
+            })
+            .map_err(map_err)?;
+        if !has_deleted_at {
+            conn.execute(
+                "ALTER TABLE harnesses ADD COLUMN deleted_at TEXT",
+                [],
+            )
+            .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -153,7 +170,8 @@ impl HarnessRepository for SqliteHarnessRepository {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses",
+                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at \
+                 FROM harnesses WHERE deleted_at IS NULL",
             )
             .map_err(map_err)?;
         let rows = stmt
@@ -228,6 +246,97 @@ impl HarnessRepository for SqliteHarnessRepository {
         tx.commit().map_err(map_err)?;
         Ok(())
     }
+
+    async fn trash_harness(&self, id: &str, deleted_at: &str) -> Result<(), CoreError> {
+        let conn = self.lock();
+        let affected = conn
+            .execute(
+                "UPDATE harnesses SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+                rusqlite::params![deleted_at, id],
+            )
+            .map_err(map_err)?;
+        if affected == 0 {
+            Err(CoreError::NotFound(id.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn restore_harness(&self, id: &str) -> Result<(), CoreError> {
+        let conn = self.lock();
+        let affected = conn
+            .execute(
+                "UPDATE harnesses SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
+                [id],
+            )
+            .map_err(map_err)?;
+        if affected == 0 {
+            Err(CoreError::NotFound(id.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn purge_harness(&self, id: &str) -> Result<(), CoreError> {
+        let mut conn = self.lock();
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(map_err)?;
+        tx.execute("DELETE FROM board_versions WHERE harness_id = ?1", [id])
+            .map_err(map_err)?;
+        tx.execute("DELETE FROM runs WHERE harness_id = ?1", [id])
+            .map_err(map_err)?;
+        let affected = tx
+            .execute("DELETE FROM harnesses WHERE id = ?1 AND deleted_at IS NOT NULL", [id])
+            .map_err(map_err)?;
+        if affected == 0 {
+            return Err(CoreError::NotFound(id.to_string()));
+        }
+        tx.commit().map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn list_trash(&self) -> Result<Vec<(String, String, String)>, CoreError> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, deleted_at FROM harnesses \
+                 WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+            )
+            .map_err(map_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(map_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_err)?;
+        Ok(rows)
+    }
+
+    async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError> {
+        let to_purge: Vec<String> = {
+            let conn = self.lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM harnesses \
+                     WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+                )
+                .map_err(map_err)?;
+            stmt.query_map([before_iso], |row| row.get(0))
+                .map_err(map_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(map_err)?
+        };
+        for id in to_purge {
+            self.purge_harness(&id).await?;
+        }
+        Ok(())
+    }
 }
 
 fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
@@ -271,7 +380,7 @@ fn row_to_harness(row: &rusqlite::Row) -> rusqlite::Result<Harness> {
 
 fn select_harness(conn: &Connection, id: &str) -> Result<Option<Harness>, CoreError> {
     conn.query_row(
-        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses WHERE id=?1",
+        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
         [id],
         row_to_harness,
     )
@@ -619,5 +728,104 @@ mod tests {
             .map(|c| c.unwrap())
             .collect();
         assert!(cols.iter().any(|c| c == "last_heartbeat_at"));
+    }
+
+    #[test]
+    fn migration_adds_deleted_at_column_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m_del.db");
+        let p = path.to_str().unwrap();
+        let _r1 = SqliteHarnessRepository::open(p).unwrap();
+        let _r2 = SqliteHarnessRepository::open(p).unwrap();
+        let conn = rusqlite::Connection::open(p).unwrap();
+        let mut s = conn.prepare("PRAGMA table_info(harnesses)").unwrap();
+        let cols: Vec<String> = s
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|c| c.unwrap())
+            .collect();
+        assert!(cols.iter().any(|c| c == "deleted_at"));
+    }
+
+    #[tokio::test]
+    async fn trash_and_restore_roundtrip() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory");
+        repo.create(&harness("h1", 1, 0), &version("v1", "h1", 1, "p"))
+            .await
+            .expect("seed");
+
+        // trash
+        repo.trash_harness("h1", "2026-06-30T10:00:00+09:00")
+            .await
+            .expect("trash");
+        assert!(repo.list().await.unwrap().is_empty(), "list excludes trashed");
+        let trash = repo.list_trash().await.unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].0, "h1");
+
+        // restore
+        repo.restore_harness("h1").await.expect("restore");
+        assert_eq!(repo.list().await.unwrap().len(), 1);
+        assert!(repo.list_trash().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn purge_harness_removes_all() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory");
+        repo.create(&harness("h1", 1, 0), &version("v1", "h1", 1, "p"))
+            .await
+            .expect("seed");
+        repo.trash_harness("h1", "2026-06-30T10:00:00+09:00")
+            .await
+            .expect("trash");
+        repo.purge_harness("h1").await.expect("purge");
+        assert!(repo.list().await.unwrap().is_empty());
+        assert!(repo.list_trash().await.unwrap().is_empty());
+        // board_versions も消えている
+        assert!(repo.get_version("h1", 1).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn purge_trash_before_removes_old_only() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory");
+        repo.create(&harness("old", 1, 0), &version("v-old", "old", 1, "p"))
+            .await
+            .expect("seed old");
+        repo.create(&harness("new", 1, 0), &version("v-new", "new", 1, "p"))
+            .await
+            .expect("seed new");
+        repo.trash_harness("old", "2025-12-01T00:00:00+09:00")
+            .await
+            .expect("trash old");
+        repo.trash_harness("new", "2026-06-29T00:00:00+09:00")
+            .await
+            .expect("trash new");
+        // cutoff: 2026-06-01 → old は削除、new は残る
+        repo.purge_trash_before("2026-06-01T00:00:00+09:00")
+            .await
+            .expect("auto-purge");
+        let trash = repo.list_trash().await.unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].0, "new");
+    }
+
+    #[tokio::test]
+    async fn list_excludes_trashed_harnesses() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory repo");
+        // seed two harnesses
+        repo.create(&harness("h1", 1, 0), &version("v1", "h1", 1, "p1"))
+            .await
+            .expect("seed h1");
+        repo.create(&harness("h2", 1, 0), &version("v2", "h2", 1, "p2"))
+            .await
+            .expect("seed h2");
+        // trash h1 directly via SQL
+        let now = "2026-06-30T10:00:00+09:00";
+        repo.lock()
+            .execute("UPDATE harnesses SET deleted_at = ?1 WHERE id = ?2", [now, "h1"])
+            .expect("set deleted_at");
+        let listed = repo.list().await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "h2");
     }
 }

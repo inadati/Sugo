@@ -32,3 +32,34 @@ describe("HarnessList", () => {
     expect(wrapper.text()).toContain("DRAFT");
   });
 });
+
+function makeRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", component: HarnessList },
+      { path: "/harness/:id", component: { template: "<div/>" } },
+    ],
+  });
+}
+
+describe("HarnessList – trash confirmation", () => {
+  it("shows confirmation dialog when trash icon clicked", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+    // ダイアログは初期非表示
+    expect(wrapper.find("[data-testid='trash-dialog']").exists()).toBe(false);
+    // ゴミ箱ボタンをクリック（h1 の行）
+    await wrapper.findAll("[data-testid='trash-btn']")[0].trigger("click");
+    expect(wrapper.find("[data-testid='trash-dialog']").exists()).toBe(true);
+    expect(wrapper.text()).toContain("alpha");
+  });
+
+  it("hides dialog on cancel", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+    await wrapper.findAll("[data-testid='trash-btn']")[0].trigger("click");
+    await wrapper.find("[data-testid='trash-cancel-btn']").trigger("click");
+    expect(wrapper.find("[data-testid='trash-dialog']").exists()).toBe(false);
+  });
+});

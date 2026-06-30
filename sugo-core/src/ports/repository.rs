@@ -51,6 +51,20 @@ pub trait HarnessRepository: Send + Sync {
         version: &BoardVersion,
         expected_lock: i64,
     ) -> Result<(), CoreError>;
+
+    /// ハーネスをゴミ箱に移動する（`deleted_at` をセット）。
+    /// `id` が存在しない場合は `CoreError::NotFound`。
+    async fn trash_harness(&self, id: &str, deleted_at: &str) -> Result<(), CoreError>;
+    /// ゴミ箱からハーネスを復活させる（`deleted_at` をクリア）。
+    /// `id` がゴミ箱に存在しない場合は `CoreError::NotFound`。
+    async fn restore_harness(&self, id: &str) -> Result<(), CoreError>;
+    /// ハーネスとその全 board_versions を物理削除する。
+    /// `id` が存在しない場合は `CoreError::NotFound`。
+    async fn purge_harness(&self, id: &str) -> Result<(), CoreError>;
+    /// ゴミ箱の一覧を返す。各要素は `(harness_id, name, deleted_at)` のタプル。
+    async fn list_trash(&self) -> Result<Vec<(String, String, String)>, CoreError>;
+    /// `before_iso` より前にゴミ箱に入ったハーネスを自動物理削除する。
+    async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError>;
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -107,6 +121,7 @@ pub mod fake {
     pub struct InMemoryHarnessRepository {
         harnesses: Mutex<HashMap<String, Harness>>,
         versions: Mutex<HashMap<(String, i64), BoardVersion>>,
+        deleted_at: Mutex<HashMap<String, String>>,
     }
     impl InMemoryHarnessRepository {
         /// Create an empty in-memory repository.
@@ -162,7 +177,13 @@ pub mod fake {
             }
         }
         async fn list(&self) -> Result<Vec<Harness>, CoreError> {
-            Ok(self.harnesses.lock().unwrap().values().cloned().collect())
+            let hs = self.harnesses.lock().unwrap();
+            let deleted = self.deleted_at.lock().unwrap();
+            Ok(hs
+                .values()
+                .filter(|h| !deleted.contains_key(&h.id))
+                .cloned()
+                .collect())
         }
         async fn get_version(
             &self,
@@ -205,6 +226,65 @@ pub mod fake {
             }
             hs.insert(harness.id.clone(), harness.clone());
             vs.insert(vkey, version.clone());
+            Ok(())
+        }
+
+        async fn trash_harness(&self, id: &str, deleted_at: &str) -> Result<(), CoreError> {
+            let hs = self.harnesses.lock().unwrap();
+            if !hs.contains_key(id) {
+                return Err(CoreError::NotFound(id.to_string()));
+            }
+            drop(hs);
+            self.deleted_at
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), deleted_at.to_string());
+            Ok(())
+        }
+
+        async fn restore_harness(&self, id: &str) -> Result<(), CoreError> {
+            let removed = self.deleted_at.lock().unwrap().remove(id);
+            if removed.is_none() {
+                return Err(CoreError::NotFound(id.to_string()));
+            }
+            Ok(())
+        }
+
+        async fn purge_harness(&self, id: &str) -> Result<(), CoreError> {
+            let mut hs = self.harnesses.lock().unwrap();
+            if hs.remove(id).is_none() {
+                return Err(CoreError::NotFound(id.to_string()));
+            }
+            let mut vs = self.versions.lock().unwrap();
+            vs.retain(|(hid, _), _| hid != id);
+            self.deleted_at.lock().unwrap().remove(id);
+            Ok(())
+        }
+
+        async fn list_trash(&self) -> Result<Vec<(String, String, String)>, CoreError> {
+            let hs = self.harnesses.lock().unwrap();
+            let deleted = self.deleted_at.lock().unwrap();
+            Ok(deleted
+                .iter()
+                .filter_map(|(id, ts)| {
+                    hs.get(id)
+                        .map(|h| (id.clone(), h.name.clone(), ts.clone()))
+                })
+                .collect())
+        }
+
+        async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError> {
+            let to_purge: Vec<String> = {
+                let deleted = self.deleted_at.lock().unwrap();
+                deleted
+                    .iter()
+                    .filter(|(_, ts)| ts.as_str() < before_iso)
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            };
+            for id in to_purge {
+                self.purge_harness(&id).await?;
+            }
             Ok(())
         }
     }

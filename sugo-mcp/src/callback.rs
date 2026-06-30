@@ -21,6 +21,7 @@ use crate::tools::RealIdClock;
 pub struct CallbackState {
     pub run_repo: Arc<SqliteRunRepository>,
     pub clock: Arc<RealIdClock>,
+    pub nipper_base: String,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +57,19 @@ async fn handle_heartbeat(State(st): State<CallbackState>, Json(req): Json<Heart
 
 async fn handle_inject_ack(State(st): State<CallbackState>, Json(req): Json<InjectAckReq>) -> Json<Value> {
     let _ = st.run_repo.set_inject_pending(&req.run_id, None).await;
+    // After ack, monitor jsonl and remind agent to call sugo_advance if it forgets.
+    let since_iso = st.clock.now_iso();
+    if let Ok(Some(run)) = st.run_repo.get(&req.run_id).await
+        && let Some(project_path) = run.project_path
+    {
+        crate::advance_reminder::spawn(
+            req.run_id,
+            project_path,
+            st.run_repo.clone(),
+            st.nipper_base.clone(),
+            since_iso,
+        );
+    }
     Json(json!({ "status": "ok" }))
 }
 
@@ -103,6 +117,7 @@ mod tests {
         CallbackState {
             run_repo: Arc::new(SqliteRunRepository::new(Mutex::new(conn))),
             clock: Arc::new(RealIdClock),
+            nipper_base: "http://127.0.0.1:8771".into(),
         }
     }
 
