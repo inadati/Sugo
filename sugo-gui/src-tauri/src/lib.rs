@@ -2,7 +2,7 @@ mod commands;
 mod dto;
 mod state;
 
-use commands::{add_cell, get_harness, list_harnesses, rename_cell};
+use commands::{add_cell, delete_cell, get_active_runs, get_harness, list_harnesses, rename_cell};
 use state::AppState;
 use tauri::Manager;
 
@@ -17,7 +17,7 @@ pub fn run() {
             app.manage(state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_harnesses, get_harness, add_cell, rename_cell,])
+        .invoke_handler(tauri::generate_handler![list_harnesses, get_harness, add_cell, rename_cell, delete_cell, get_active_runs,])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

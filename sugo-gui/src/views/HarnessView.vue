@@ -1,6 +1,6 @@
 <template>
-  <div v-if="detail">
-    <div class="flex items-center justify-between mb-4">
+  <div v-if="detail" class="flex flex-col h-full">
+    <div class="shrink-0 flex items-center justify-between mb-3">
       <div>
         <button class="text-gray-400 text-sm hover:text-gray-600 mb-1" @click="router.push('/')">← 一覧</button>
         <h2 class="text-xl font-semibold">{{ detail.name }}</h2>
@@ -13,7 +13,7 @@
     </div>
 
     <!-- ドラフト差分 -->
-    <div v-if="detail.draft_diff.length > 0" class="mb-4 bg-yellow-50 border border-yellow-200 rounded p-3">
+    <div v-if="detail.draft_diff.length > 0" class="shrink-0 mb-3 bg-yellow-50 border border-yellow-200 rounded p-3">
       <p class="text-sm font-medium text-yellow-800 mb-1">ドラフトセル（エージェントへ共有）</p>
       <ul class="text-sm text-yellow-700 space-y-0.5">
         <li v-for="d in detail.draft_diff" :key="d.cell_id">・{{ d.name }} ({{ d.cell_id }})</li>
@@ -22,21 +22,27 @@
 
     <!-- 盤面グラフ -->
     <BoardGraph
+      class="flex-1 min-h-0"
+      :harness-id="detail.harness_id"
       :cells="detail.cells"
       :edges="detail.edges"
       :start-cell-id="detail.cells[0]?.id ?? ''"
+      :active-runs="activeRuns"
       @select="onSelectCell"
     />
 
-    <!-- マス詳細パネル -->
-    <CellDetailPanel
-      v-if="selectedCell"
-      :harness-id="detail.harness_id"
-      :cell="selectedCell"
-      :lock-version="lockVersion"
-      @close="selectedCellId = null"
-      @renamed="onCellRenamed"
-    />
+    <!-- マス詳細パネル: パネル外クリックで閉じるオーバーレイ -->
+    <template v-if="selectedCell">
+      <div class="fixed inset-0 z-30" @click="selectedCellId = null" />
+      <CellDetailPanel
+        :harness-id="detail.harness_id"
+        :cell="selectedCell"
+        :lock-version="lockVersion"
+        @close="selectedCellId = null"
+        @renamed="onCellRenamed"
+        @deleted="onCellDeleted"
+      />
+    </template>
 
     <!-- マス追加ダイアログ -->
     <AddCellDialog
@@ -74,18 +80,30 @@ interface HarnessDetail {
   draft_diff: { cell_id: string; name: string }[];
 }
 
+interface ActiveRun {
+  run_id: string;
+  current_cell_id: string;
+  project_path: string | null;
+}
+
 const detail = ref<HarnessDetail | null>(null);
 const lockVersion = ref(0);
 const showAddCell = ref(false);
 const selectedCellId = ref<string | null>(null);
+const activeRuns = ref<ActiveRun[]>([]);
 
 const selectedCell = computed<Cell | null>(
   () => detail.value?.cells.find((c) => c.id === selectedCellId.value) ?? null
 );
 
 async function load() {
-  detail.value = await invoke<HarnessDetail>("get_harness", { harnessId: props.id });
-  lockVersion.value = detail.value.lock_version;
+  const [d, runs] = await Promise.all([
+    invoke<HarnessDetail>("get_harness", { harnessId: props.id }),
+    invoke<ActiveRun[]>("get_active_runs", { harnessId: props.id }),
+  ]);
+  detail.value = d;
+  lockVersion.value = d.lock_version;
+  activeRuns.value = runs;
 }
 
 function onSelectCell(cellId: string) {
@@ -103,6 +121,12 @@ async function onCellRenamed(_newVersion: number, newLockVersion: number) {
   await load();
 }
 
+async function onCellDeleted(_newVersion: number, newLockVersion: number) {
+  selectedCellId.value = null;
+  lockVersion.value = newLockVersion;
+  await load();
+}
+
 // ── ポーリング（#15）: current_version 変化時のみ再描画。非アクティブ時は停止 ──
 const POLL_INTERVAL_MS = 2000;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -110,11 +134,15 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 async function poll() {
   if (document.hidden) return;
   try {
-    const latest = await invoke<HarnessDetail>("get_harness", { harnessId: props.id });
+    const [latest, runs] = await Promise.all([
+      invoke<HarnessDetail>("get_harness", { harnessId: props.id }),
+      invoke<ActiveRun[]>("get_active_runs", { harnessId: props.id }),
+    ]);
     if (!detail.value || latest.current_version !== detail.value.current_version) {
       detail.value = latest;
       lockVersion.value = latest.lock_version;
     }
+    activeRuns.value = runs;
   } catch {
     // 1 回の失敗は無視（次周期で自己修復）
   }

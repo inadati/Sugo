@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS runs (
   project_path     TEXT,
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
-  last_heartbeat_at TEXT
+  last_heartbeat_at TEXT,
+  inject_pending_since TEXT
 );
 "#;

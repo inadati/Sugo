@@ -54,3 +54,16 @@ pub struct RenameCellResultDto {
     pub new_version: i64,
     pub lock_version: i64,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DeleteCellResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActiveRunDto {
+    pub run_id: String,
+    pub current_cell_id: String,
+    pub project_path: Option<String>,
+}

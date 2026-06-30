@@ -46,12 +46,12 @@ impl RunRepository for SqliteRunRepository {
     async fn create(&self, run: &Run) -> Result<(), CoreError> {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         conn.execute(
-            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 run.id, run.harness_id, run.board_version_no, run.current_cell_id,
                 status_str(&run.status), run.project_path, run.created_at, run.updated_at,
-                run.last_heartbeat_at
+                run.last_heartbeat_at, run.inject_pending_since
             ],
         )
         .map_err(map_err)?;
@@ -62,7 +62,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let row = conn
             .query_row(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since \
                  FROM runs WHERE id = ?1",
                 [run_id],
                 |row| {
@@ -79,6 +79,7 @@ impl RunRepository for SqliteRunRepository {
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
                         last_heartbeat_at: row.get(8)?,
+                        inject_pending_since: row.get(9)?,
                     })
                 },
             )
@@ -110,7 +111,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since \
                  FROM runs WHERE harness_id = ?1 ORDER BY created_at DESC",
             )
             .map_err(map_err)?;
@@ -129,6 +130,7 @@ impl RunRepository for SqliteRunRepository {
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
                     last_heartbeat_at: row.get(8)?,
+                    inject_pending_since: row.get(9)?,
                 })
             })
             .map_err(map_err)?;
@@ -139,6 +141,16 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         conn.execute(
             "UPDATE runs SET last_heartbeat_at = ?1 WHERE id = ?2",
+            rusqlite::params![ts, run_id],
+        )
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn set_inject_pending(&self, run_id: &str, ts: Option<&str>) -> Result<(), CoreError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "UPDATE runs SET inject_pending_since = ?1 WHERE id = ?2",
             rusqlite::params![ts, run_id],
         )
         .map_err(map_err)?;
@@ -170,6 +182,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00+09:00".into(),
             updated_at: "2026-01-01T00:00:00+09:00".into(),
             last_heartbeat_at: None,
+            inject_pending_since: None,
         }
     }
 
