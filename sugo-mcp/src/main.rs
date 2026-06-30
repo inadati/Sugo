@@ -513,7 +513,7 @@ fn build_inject_text(
             })
             .collect();
         format!(
-            "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を呼んでください。\nrun_id: {}\n選択できるエッジ:\n{}",
+            "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を1回だけ呼んでください。\n呼んだ後は、次の Sugo メッセージ（inject）が実際に届くまで待機すること。ループ構造から「次も同じステップだ」と推測して、injectを待たずに次の作業へ進んではいけません。1 inject ＝ 1 ステップを厳守してください。\nrun_id: {}\n選択できるエッジ:\n{}",
             prompt, run_id, edge_lines.join("\n")
         )
     }
