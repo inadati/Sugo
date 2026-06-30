@@ -104,6 +104,23 @@ impl SqliteHarnessRepository {
             conn.execute("ALTER TABLE runs ADD COLUMN inject_pending_since TEXT", [])
                 .map_err(map_err)?;
         }
+        // Idempotent migration for deleted_at (soft-delete trash, added 2026-06).
+        let has_deleted_at: bool = conn
+            .prepare("PRAGMA table_info(harnesses)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "deleted_at"))
+            })
+            .map_err(map_err)?;
+        if !has_deleted_at {
+            conn.execute(
+                "ALTER TABLE harnesses ADD COLUMN deleted_at TEXT",
+                [],
+            )
+            .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -153,7 +170,8 @@ impl HarnessRepository for SqliteHarnessRepository {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at FROM harnesses",
+                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at \
+                 FROM harnesses WHERE deleted_at IS NULL",
             )
             .map_err(map_err)?;
         let rows = stmt
@@ -619,5 +637,42 @@ mod tests {
             .map(|c| c.unwrap())
             .collect();
         assert!(cols.iter().any(|c| c == "last_heartbeat_at"));
+    }
+
+    #[test]
+    fn migration_adds_deleted_at_column_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m_del.db");
+        let p = path.to_str().unwrap();
+        let _r1 = SqliteHarnessRepository::open(p).unwrap();
+        let _r2 = SqliteHarnessRepository::open(p).unwrap();
+        let conn = rusqlite::Connection::open(p).unwrap();
+        let mut s = conn.prepare("PRAGMA table_info(harnesses)").unwrap();
+        let cols: Vec<String> = s
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|c| c.unwrap())
+            .collect();
+        assert!(cols.iter().any(|c| c == "deleted_at"));
+    }
+
+    #[tokio::test]
+    async fn list_excludes_trashed_harnesses() {
+        let repo = SqliteHarnessRepository::in_memory().expect("in-memory repo");
+        // seed two harnesses
+        repo.create(&harness("h1", 1, 0), &version("v1", "h1", 1, "p1"))
+            .await
+            .expect("seed h1");
+        repo.create(&harness("h2", 1, 0), &version("v2", "h2", 1, "p2"))
+            .await
+            .expect("seed h2");
+        // trash h1 directly via SQL
+        let now = "2026-06-30T10:00:00+09:00";
+        repo.lock()
+            .execute("UPDATE harnesses SET deleted_at = ?1 WHERE id = ?2", [now, "h1"])
+            .expect("set deleted_at");
+        let listed = repo.list().await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "h2");
     }
 }
