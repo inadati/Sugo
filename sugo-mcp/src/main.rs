@@ -231,6 +231,51 @@ impl SugoServer {
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
 
+    /// Read a single cell's full detail, including its current prompt.
+    ///
+    /// `sugo_status` deliberately omits `prompt` to keep the overview compact
+    /// (design decision, see the comment above its cells projection); this is
+    /// the read counterpart to `sugo_edit_cell` for callers that need the
+    /// exact current prompt text, e.g. to revise it in light of a cell's
+    /// `request_memo` before calling `sugo_edit_cell` or `sugo_update_harness`.
+    #[tool(description = "Get a single cell's full detail: { cell_id, name, prompt, status, \
+        terminal, memo }. Unlike sugo_status (which never includes prompt), this returns the \
+        cell's exact current prompt text — use this before revising a cell's prompt (e.g. in \
+        light of its request_memo) so the revision is grounded in the actual current content, \
+        not a summary.")]
+    async fn sugo_get_cell(
+        &self,
+        Parameters(args): Parameters<tools::GetCellArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::get_status::get_status;
+
+        let st = get_status(self.repo.as_ref(), &args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let cell = st
+            .definition
+            .cells
+            .iter()
+            .find(|c| c.id == args.cell_id)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!("cell not found: {}", args.cell_id),
+                    Some(serde_json::json!({ "code": "not_found" })),
+                )
+            })?;
+
+        let payload = serde_json::json!({
+            "cell_id": cell.id,
+            "name": cell.name,
+            "prompt": cell.prompt,
+            "status": cell.status,
+            "terminal": cell.terminal,
+            "memo": cell.request_memo,
+        });
+        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+    }
+
     /// Validate a harness's board structure and return any issues.
     #[tool(description = "Validate board structure. Pass harness_id to validate a stored \
         harness, or definition to validate a board definition directly (exactly one). \
@@ -756,6 +801,49 @@ mod tests {
 
         assert!(p["edges"].is_array(), "edges is a top-level array");
         assert!(p["draft_diff"].is_array(), "draft_diff is a top-level array");
+    }
+
+    #[tokio::test]
+    async fn get_cell_returns_full_detail_including_prompt() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .await
+            .expect("get_cell succeeds");
+        let p = payload(&result);
+
+        assert_eq!(p["cell_id"], "c1");
+        assert_eq!(p["name"], "start");
+        assert_eq!(p["prompt"], "p");
+        assert_eq!(p["status"], "active");
+        assert_eq!(p["terminal"], true);
+        assert_eq!(p["memo"], "");
+    }
+
+    #[tokio::test]
+    async fn get_cell_surfaces_non_empty_memo() {
+        let srv = server();
+        let mut def = valid_board();
+        def.cells[0].request_memo = "もっと丁寧に".into();
+        let id = create_harness(&srv, "h", Some(def)).await;
+        let result = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .await
+            .expect("get_cell succeeds");
+        let p = payload(&result);
+        assert_eq!(p["memo"], "もっと丁寧に");
+    }
+
+    #[tokio::test]
+    async fn get_cell_unknown_cell_id_is_not_found() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let err = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "ghost".into() }))
+            .await
+            .expect_err("unknown cell_id fails");
+        assert_eq!(error_code(&err), "not_found");
     }
 
     #[tokio::test]
