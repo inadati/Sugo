@@ -32,8 +32,14 @@ pub struct Cell {
     /// Whether the cell terminates the board (a valid end state).
     pub terminal: bool,
     /// Human-authored request for the AI to revise this cell's prompt;
-    /// empty string means no pending request. Non-empty triggers automatic
-    /// demotion to `Draft` on save (see `set_cell_memo`).
+    /// empty string means no pending request. Always stored trimmed.
+    ///
+    /// Two write paths exist with different status-coupling: the GUI's
+    /// `set_cell_memo` demotes `Active` to `Draft` automatically when a
+    /// non-empty memo is saved. The AI-facing `update_harness` (via
+    /// `sugo_update_harness`) applies no such coupling — it writes `memo`
+    /// and `status` independently, since the AI caller sets both
+    /// explicitly in one call when resolving a draft.
     #[serde(default)]
     pub request_memo: String,
 }

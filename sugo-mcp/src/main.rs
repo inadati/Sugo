@@ -446,7 +446,10 @@ impl SugoServer {
     #[tool(description = "Batch-update a harness in a single new board version. \
         cell_changes: [{cell_id, prompt?, status?, memo?}] — prompt, status, and memo are optional \
         (omit to keep current; status must be 'active' or 'draft'; memo is the human's request_memo, \
-        pass \"\" to clear it). \
+        pass \"\" to clear it, stored trimmed). \
+        Setting memo here does NOT auto-change status — unlike the GUI's memo-save flow, this tool \
+        applies status and memo independently, so pass status explicitly (e.g. status:'active' \
+        alongside memo:'' when resolving a draft). \
         edge_add: [{from, to, label, guard?}] — edges to add. \
         edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
         All three arrays default to empty. Returns { harness_id, new_version, lock_version }.")]

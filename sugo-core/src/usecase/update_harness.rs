@@ -68,7 +68,7 @@ pub async fn update_harness(
             cell.status = s;
         }
         if let Some(ref m) = change.memo {
-            cell.request_memo = m.clone();
+            cell.request_memo = m.trim().to_string();
         }
     }
 
@@ -400,5 +400,41 @@ mod tests {
         let cell = vv.definition.cells.iter().find(|c| c.id == "c2").unwrap();
         assert_eq!(cell.prompt, "revised prompt");
         assert_eq!(cell.request_memo, "");
+    }
+
+    #[tokio::test]
+    async fn update_trims_whitespace_only_memo_to_empty() {
+        // The AI-facing memo-write path must normalize whitespace-only memo
+        // the same way the GUI's set_cell_memo_inner does, so the same field
+        // doesn't silently diverge in stored content depending on which
+        // entry point wrote it.
+        let (repo, clock, id) = seed().await;
+        let out = update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![CellChange {
+                    cell_id: "c1".into(),
+                    prompt: None,
+                    status: None,
+                    memo: Some("   ".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.new_version, 2);
+        let (_, v) = repo.get(&id).await.unwrap().unwrap();
+        let cell = v.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(cell.request_memo, "");
+        // update_harness never auto-couples status to memo (unlike the GUI's
+        // set_cell_memo): status is driven solely by the change's own
+        // `status` field, which was omitted here, so it stays Active.
+        assert_eq!(cell.status, CellStatus::Active);
     }
 }
