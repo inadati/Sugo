@@ -1,13 +1,13 @@
-use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, DeleteCellResultDto, DeleteEdgeResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
+use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto, DeleteCellResultDto, DeleteEdgeResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::edge::{Edge, Guard};
-use sugo_core::domain::harness::BoardVersion;
+use sugo_core::domain::harness::{BoardVersion, Harness};
 use sugo_core::domain::run::RunStatus;
 use sugo_core::error::CoreError;
 use sugo_core::ports::repository::HarnessRepository;
 use sugo_core::ports::run_repository::RunRepository;
-use sugo_core::usecase::create_harness::content_hash;
+use sugo_core::usecase::create_harness::{content_hash, default_board};
 use sugo_core::usecase::get_status::get_status;
 use tauri::State;
 
@@ -38,6 +38,60 @@ pub async fn list_harnesses(
             has_draft: h.has_draft,
         })
         .collect())
+}
+
+/// 新規ハーネスを作成する（v1・default_board）。GUI の一覧画面から手動作成する導線。
+///
+/// 実体は [`create_harness_inner`] にあり、本コマンドはそれへの薄いラッパ。
+#[tauri::command]
+pub async fn create_harness(
+    state: State<'_, AppState>,
+    name: String,
+    description: Option<String>,
+) -> Result<CreateHarnessResultDto, String> {
+    create_harness_inner(state.repo.as_ref(), name, description).await
+}
+
+/// `create_harness` の実体。repo を直接受け取りテスト可能にする。
+async fn create_harness_inner(
+    repo: &dyn HarnessRepository,
+    name: String,
+    description: Option<String>,
+) -> Result<CreateHarnessResultDto, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("empty_name".to_string());
+    }
+    let description = description
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+
+    let def = default_board();
+    let now = chrono::Local::now().to_rfc3339();
+    let harness_id = uuid::Uuid::new_v4().to_string();
+    let harness = Harness {
+        id: harness_id.clone(),
+        name: trimmed.to_string(),
+        description,
+        current_version: 1,
+        has_draft: false,
+        lock_version: 0,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    let version = BoardVersion {
+        id: uuid::Uuid::new_v4().to_string(),
+        harness_id: harness_id.clone(),
+        version_no: 1,
+        content_hash: content_hash(&def),
+        definition: def,
+        created_at: now,
+    };
+    repo.create(&harness, &version)
+        .await
+        .map_err(map_core_error)?;
+
+    Ok(CreateHarnessResultDto { harness_id })
 }
 
 /// ハーネス詳細取得（グラフ描画用）
@@ -712,7 +766,7 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner, update_edge_inner};
+    use super::{add_cell_inner, add_edge_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner, update_edge_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -895,6 +949,54 @@ mod tests {
             .unwrap_err();
         // フロントが分岐する安定コードに一致すること（rename と対称）
         assert_eq!(err, "lock_conflict");
+    }
+
+    // ── create_harness（コマンド本体 create_harness_inner を直接実行）──────────
+
+    #[tokio::test]
+    async fn create_harness_inner_creates_v1_default_board() {
+        let repo = InMemoryHarnessRepository::new();
+        let res = create_harness_inner(&repo, "my harness".into(), None)
+            .await
+            .unwrap();
+        let (h, bv) = repo.get(&res.harness_id).await.unwrap().unwrap();
+        assert_eq!(h.name, "my harness");
+        assert_eq!(h.current_version, 1);
+        assert_eq!(h.lock_version, 0);
+        assert!(!h.has_draft);
+        assert_eq!(bv.version_no, 1);
+        assert_eq!(bv.definition.cells.len(), 1);
+        assert_eq!(bv.definition.cells[0].id, "start");
+        assert_eq!(bv.definition.start, "start");
+        assert_eq!(bv.content_hash.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn create_harness_inner_trims_and_rejects_empty_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = create_harness_inner(&repo, "   ".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "empty_name");
+        // 空名は repo.create 前に弾かれ、ハーネスは一切作成されない（不変条件を固定）
+        assert!(repo.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_harness_inner_normalizes_description() {
+        let repo = InMemoryHarnessRepository::new();
+        // 空文字の説明は None に正規化される
+        let r1 = create_harness_inner(&repo, "a".into(), Some("  ".into()))
+            .await
+            .unwrap();
+        let (h1, _) = repo.get(&r1.harness_id).await.unwrap().unwrap();
+        assert_eq!(h1.description, None);
+        // 非空の説明は trim して保持
+        let r2 = create_harness_inner(&repo, "b".into(), Some("  説明  ".into()))
+            .await
+            .unwrap();
+        let (h2, _) = repo.get(&r2.harness_id).await.unwrap().unwrap();
+        assert_eq!(h2.description.as_deref(), Some("説明"));
     }
 
     // ── rename_cell（コマンド本体 rename_cell_inner を直接実行）──────────────

@@ -1,6 +1,13 @@
 <template>
-  <div>
-    <h2 class="text-lg font-semibold mb-4">ハーネス一覧</h2>
+  <div class="px-6 py-5">
+    <div class="flex items-center justify-between mb-5">
+      <h2 class="text-lg font-semibold">ハーネス一覧</h2>
+      <button
+        data-testid="create-harness-btn"
+        class="bg-blue-500 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-600"
+        @click="showCreate = true"
+      >＋新規ハーネス</button>
+    </div>
     <ul class="space-y-2">
       <li
         v-for="h in harnesses"
@@ -28,7 +35,7 @@
       </li>
     </ul>
     <p v-if="harnesses.length === 0" class="text-gray-400">
-      ハーネスがありません。MCP の sugo_create_harness で作成してください。
+      まだハーネスがありません。「＋新規ハーネス」から作成してください。
     </p>
 
     <!-- 確認ダイアログ -->
@@ -59,6 +66,13 @@
         </div>
       </div>
     </div>
+
+    <!-- 新規作成ダイアログ -->
+    <NewHarnessDialog
+      v-if="showCreate"
+      @close="showCreate = false"
+      @created="onCreated"
+    />
   </div>
 </template>
 
@@ -67,6 +81,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import { TrashIcon } from "@heroicons/vue/24/outline";
+import NewHarnessDialog from "../components/NewHarnessDialog.vue";
 
 interface HarnessSummary {
   harness_id: string;
@@ -80,10 +95,16 @@ const router = useRouter();
 const harnesses = ref<HarnessSummary[]>([]);
 const trashTarget = ref<HarnessSummary | null>(null);
 const trashError = ref<string | null>(null);
+const showCreate = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 async function fetchHarnesses() {
   harnesses.value = await invoke<HarnessSummary[]>("list_harnesses");
+}
+
+function onCreated(harnessId: string) {
+  showCreate.value = false;
+  router.push(`/harness/${harnessId}`);
 }
 
 function confirmTrash(h: HarnessSummary) {

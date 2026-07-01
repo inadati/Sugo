@@ -47,6 +47,11 @@ pub struct HarnessDetailDto {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CreateHarnessResultDto {
+    pub harness_id: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AddCellResultDto {
     pub new_version: i64,
     pub lock_version: i64,
