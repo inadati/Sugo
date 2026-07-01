@@ -62,6 +62,18 @@ pub struct DeleteCellResultDto {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AddEdgeResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteEdgeResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ActiveRunDto {
     pub run_id: String,
     pub current_cell_id: String,
