@@ -117,6 +117,7 @@ pub async fn get_harness(
                 CellStatus::Draft => "draft".to_string(),
             },
             terminal: c.terminal,
+            memo: c.request_memo.clone(),
         })
         .collect();
 
@@ -138,6 +139,7 @@ pub async fn get_harness(
         .map(|d| DraftCellDto {
             cell_id: d.cell_id.clone(),
             name: d.name.clone(),
+            memo: d.memo.clone(),
         })
         .collect();
 
@@ -199,6 +201,7 @@ async fn add_cell_inner(
         prompt: String::new(),
         status: CellStatus::Draft,
         terminal: false,
+        request_memo: "".into(),
     });
 
     let new_version_no = harness.current_version + 1;
@@ -269,6 +272,72 @@ async fn rename_cell_inner(
         .find(|c| c.id == cell_id)
         .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
     cell.name = trimmed.to_string();
+
+    let new_version_no = harness.current_version + 1;
+    let now = chrono::Local::now().to_rfc3339();
+    let new_version = BoardVersion {
+        id: uuid::Uuid::new_v4().to_string(),
+        harness_id: harness_id.clone(),
+        version_no: new_version_no,
+        content_hash: content_hash(&new_def),
+        definition: new_def.clone(),
+        created_at: now.clone(),
+    };
+
+    harness.current_version = new_version_no;
+    harness.has_draft = new_def.cells.iter().any(|c| c.status == CellStatus::Draft);
+    harness.lock_version = lock_version + 1;
+    harness.updated_at = now;
+
+    repo.append_version(&harness, &new_version, lock_version)
+        .await
+        .map_err(map_core_error)?;
+
+    Ok(RenameCellResultDto {
+        new_version: new_version_no,
+        lock_version: harness.lock_version,
+    })
+}
+
+/// マスの要望メモを設定する（楽観ロック付き）。
+///
+/// 非空メモを保存すると、現在 Active なら Draft へ自動降格する。
+/// 空メモの保存では status に触れない（AI 経由の昇格のみを許可する）。
+#[tauri::command]
+pub async fn set_cell_memo(
+    state: State<'_, AppState>,
+    harness_id: String,
+    cell_id: String,
+    memo: String,
+    lock_version: i64,
+) -> Result<RenameCellResultDto, String> {
+    set_cell_memo_inner(state.repo.as_ref(), harness_id, cell_id, memo, lock_version).await
+}
+
+/// `set_cell_memo` の実体。repo を直接受け取りテスト可能にする。
+async fn set_cell_memo_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    cell_id: String,
+    memo: String,
+    lock_version: i64,
+) -> Result<RenameCellResultDto, String> {
+    let (mut harness, head) = repo
+        .get(&harness_id)
+        .await
+        .map_err(map_core_error)?
+        .ok_or_else(|| CoreError::NotFound(harness_id.clone()).to_string())?;
+
+    let mut new_def = head.definition.clone();
+    let cell = new_def
+        .cells
+        .iter_mut()
+        .find(|c| c.id == cell_id)
+        .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
+    cell.request_memo = memo.clone();
+    if !memo.trim().is_empty() && cell.status == CellStatus::Active {
+        cell.status = CellStatus::Draft;
+    }
 
     let new_version_no = harness.current_version + 1;
     let now = chrono::Local::now().to_rfc3339();
@@ -766,7 +835,7 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner, update_edge_inner};
+    use super::{add_cell_inner, add_edge_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -829,6 +898,7 @@ mod tests {
                     prompt: "p1".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -836,6 +906,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -868,6 +939,7 @@ mod tests {
                 prompt: "do the thing".into(),
                 status: CellStatus::Active,
                 terminal: false,
+                request_memo: "".into(),
             }],
             edges: vec![],
         };
@@ -1013,6 +1085,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: false,
+                request_memo: "".into(),
             }],
             edges: vec![],
         };
@@ -1088,6 +1161,53 @@ mod tests {
             .await
             .unwrap_err();
         // フロントが分岐する安定コードに一致すること
+        assert_eq!(err, "lock_conflict");
+    }
+
+    // ── set_cell_memo（コマンド本体 set_cell_memo_inner を直接実行）────────────
+
+    #[tokio::test]
+    async fn set_cell_memo_inner_demotes_active_cell_to_draft_on_non_empty_memo() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        let res = set_cell_memo_inner(&repo, hid.clone(), "c1".into(), "直してほしい".into(), 0)
+            .await
+            .unwrap();
+        assert_eq!(res.new_version, 2);
+        assert_eq!(res.lock_version, 1);
+
+        let (h2, bv2) = repo.get(&hid).await.unwrap().unwrap();
+        let c1 = bv2.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(c1.request_memo, "直してほしい");
+        assert_eq!(c1.status, CellStatus::Draft);
+        assert!(h2.has_draft);
+    }
+
+    #[tokio::test]
+    async fn set_cell_memo_inner_empty_memo_does_not_change_status() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        set_cell_memo_inner(&repo, hid.clone(), "c1".into(), "".into(), 0)
+            .await
+            .unwrap();
+
+        let (h2, bv2) = repo.get(&hid).await.unwrap().unwrap();
+        let c1 = bv2.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(c1.request_memo, "");
+        assert_eq!(c1.status, CellStatus::Active);
+        assert!(!h2.has_draft);
+    }
+
+    #[tokio::test]
+    async fn set_cell_memo_inner_stale_lock_is_lock_conflict() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        let err = set_cell_memo_inner(&repo, hid.clone(), "c1".into(), "memo".into(), 99)
+            .await
+            .unwrap_err();
         assert_eq!(err, "lock_conflict");
     }
 
