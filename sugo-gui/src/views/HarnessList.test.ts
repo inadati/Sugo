@@ -63,3 +63,17 @@ describe("HarnessList – trash confirmation", () => {
     expect(wrapper.find("[data-testid='trash-dialog']").exists()).toBe(false);
   });
 });
+
+describe("HarnessList – create", () => {
+  it("shows create button and opens NewHarnessDialog on click", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+    const btn = wrapper.find("[data-testid='create-harness-btn']");
+    expect(btn.exists()).toBe(true);
+    // 初期はダイアログ非表示
+    expect(wrapper.find("[data-testid='name']").exists()).toBe(false);
+    await btn.trigger("click");
+    // NewHarnessDialog の名前入力が表示される
+    expect(wrapper.find("[data-testid='name']").exists()).toBe(true);
+  });
+});

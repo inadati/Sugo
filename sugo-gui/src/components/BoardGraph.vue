@@ -312,6 +312,20 @@ function placeNewNodes(saved: PositionMap, missingIds: string[]) {
   });
 }
 
+/// 全体が収まるようフィットしつつ、拡大しすぎないようズーム率を上限で抑える。
+///
+/// ノードが1〜数個だけのとき cy.fit() は画面いっぱいに拡大して不恰好になるため、
+/// 等倍（1.0）を上限にクランプし、はみ出さない場合は中央寄せする。
+const MAX_FIT_ZOOM = 1.0;
+function fitView() {
+  if (!cy) return;
+  cy.fit(undefined, 40);
+  if (cy.zoom() > MAX_FIT_ZOOM) {
+    cy.zoom(MAX_FIT_ZOOM);
+    cy.center();
+  }
+}
+
 function placeNodes() {
   if (!cy) return;
   const saved = loadPositions();
@@ -326,13 +340,14 @@ function placeNodes() {
       placeNewNodes(saved, missingIds);
       savePositions();
     }
-    cy.fit(undefined, 40);
+    fitView();
     computeMarkerPositions();
   } else {
     // 保存が全く無い（初回）→ dagre で自動レイアウト
     const layout = cy.layout(DAGRE_OPTIONS);
     layout.one("layoutstop", () => {
       savePositions();
+      fitView();
       computeMarkerPositions();
     });
     layout.run();
@@ -485,7 +500,7 @@ function refresh() {
 function onResize() {
   if (!cy || !container.value) return;
   cy.resize();
-  cy.fit(undefined, 40);
+  fitView();
   computeMarkerPositions();
 }
 

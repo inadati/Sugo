@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <h2 class="text-lg font-semibold mb-4">ゴミ箱</h2>
+  <div class="px-6 py-5">
+    <h2 class="text-lg font-semibold mb-5">ゴミ箱</h2>
 
     <ul v-if="trashItems.length > 0" class="space-y-2">
       <li
