@@ -86,8 +86,10 @@ impl SugoServer {
     /// Report a harness's current status, or a summary of all harnesses.
     #[tool(description = "Get status. With harness_id: returns { harness_id, name, \
         current_version, has_draft, cells:[{id,name,status,terminal}], edges:[...], \
-        draft_diff:[{cell_id,name}], \
+        draft_diff:[{cell_id,name,memo}], \
         running_runs:[{run_id, current_cell_id, is_stalled, secs_since_last_modified}] }. \
+        draft_diff's memo is the human's request_memo for that draft cell (empty string \
+        for newly added cells with no request). \
         running_runs contains all Running-state runs with on-demand stall detection via \
         jsonl mtime (timeout 300 s). Without harness_id: returns { harnesses:[...] }.")]
     async fn sugo_status(
@@ -131,7 +133,7 @@ impl SugoServer {
                 let draft_diff: Vec<serde_json::Value> = st
                     .draft_diff
                     .iter()
-                    .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name }))
+                    .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name, "memo": d.memo }))
                     .collect();
 
                 // On-demand stall detection: list Running runs and check each
@@ -400,8 +402,9 @@ impl SugoServer {
 
     /// Batch-update cells and edges in one new board version.
     #[tool(description = "Batch-update a harness in a single new board version. \
-        cell_changes: [{cell_id, prompt?, status?}] — prompt and status are optional \
-        (omit to keep current; status must be 'active' or 'draft'). \
+        cell_changes: [{cell_id, prompt?, status?, memo?}] — prompt, status, and memo are optional \
+        (omit to keep current; status must be 'active' or 'draft'; memo is the human's request_memo, \
+        pass \"\" to clear it). \
         edge_add: [{from, to, label, guard?}] — edges to add. \
         edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
         All three arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
@@ -428,7 +431,7 @@ impl SugoServer {
                         Some(serde_json::json!({ "code": "invalid_arguments" })),
                     )),
                 }?;
-                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status })
+                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status, memo: c.memo })
             })
             .collect::<Result<_, ErrorData>>()?;
 
@@ -1103,6 +1106,7 @@ mod tests {
                     cell_id: "c2".into(),
                     prompt: Some("done".into()),
                     status: Some("active".into()),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -1135,6 +1139,7 @@ mod tests {
                 cell_id: "c2".into(),
                 prompt: Some("done".into()),
                 status: Some("active".into()),
+                memo: None,
             }],
             edge_add: vec![],
             edge_remove: vec![],
@@ -1169,6 +1174,7 @@ mod tests {
                     cell_id: "start".into(),
                     prompt: None,
                     status: Some("unknown_status".into()),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -1186,5 +1192,68 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(code, "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn status_detail_draft_diff_includes_memo() {
+        // draft_diff entries must expose the cell's request_memo alongside cell_id/name.
+        let srv = server();
+        let board_with_memo = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "start".into(),
+                    prompt: "do start".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "finish".into(),
+                    prompt: "".into(),
+                    status: CellStatus::Draft,
+                    terminal: true,
+                    request_memo: "もっと丁寧に書き直してほしい".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        let id = create_harness(&srv, "h", Some(board_with_memo)).await;
+        let result = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .await
+            .expect("status succeeds");
+        let p = payload(&result);
+        let draft_diff = p["draft_diff"].as_array().expect("draft_diff array");
+        let entry = draft_diff
+            .iter()
+            .find(|d| d["cell_id"] == serde_json::json!("c2"))
+            .expect("c2 present in draft_diff");
+        assert_eq!(entry["memo"], serde_json::json!("もっと丁寧に書き直してほしい"));
+    }
+
+    #[tokio::test]
+    async fn update_harness_accepts_memo_arg() {
+        // The memo field on CellChangeArgs must be accepted and forwarded without error.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: id,
+                expected_lock_version: 0,
+                cell_changes: vec![tools::CellChangeArgs {
+                    cell_id: "c1".into(),
+                    prompt: None,
+                    status: None,
+                    memo: Some("test memo".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await;
+        assert!(result.is_ok());
     }
 }

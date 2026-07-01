@@ -110,6 +110,9 @@ pub struct CellChangeArgs {
     /// New status: "active" or "draft"; omit to keep the current status.
     #[serde(default)]
     pub status: Option<String>,
+    /// New request_memo text; omit to keep the current memo. Pass "" to clear.
+    #[serde(default)]
+    pub memo: Option<String>,
 }
 
 /// Identifies an edge to remove by its (from, to, label) triple.
