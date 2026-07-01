@@ -39,6 +39,23 @@
     <label class="block text-xs text-gray-500 mb-1">プロンプト</label>
     <pre class="text-sm bg-gray-50 border border-gray-200 rounded p-3 whitespace-pre-wrap break-words">{{ cell.prompt || "（未登録）" }}</pre>
 
+    <!-- 要望メモ -->
+    <label class="block text-xs text-gray-500 mb-1 mt-4">AIへの要望メモ</label>
+    <textarea
+      data-testid="memo-input"
+      v-model="memoDraft"
+      rows="3"
+      placeholder="このマスのプロンプトをこう直してほしい、など"
+      class="w-full border border-gray-300 rounded px-2 py-1 mb-1 focus:outline-none focus:border-blue-400 resize-none"
+    />
+    <button
+      data-testid="memo-save"
+      class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+      :disabled="memoSaving"
+      @click="saveMemo"
+    >メモを保存</button>
+    <p v-if="memoErrorMsg" data-testid="memo-error" class="text-red-500 text-sm mt-1">{{ memoErrorMsg }}</p>
+
     <!-- マス削除（START 以外は draft/active を問わず削除可） -->
     <div v-if="!isStart" class="mt-6 border-t border-gray-100 pt-4">
       <button
@@ -63,6 +80,7 @@ interface CellData {
   prompt: string;
   status: string;
   terminal: boolean;
+  memo: string;
 }
 
 const props = defineProps<{ harnessId: string; cell: CellData; lockVersion: number; isStart?: boolean }>();
@@ -70,6 +88,7 @@ const emit = defineEmits<{
   close: [];
   renamed: [newVersion: number, lockVersion: number];
   deleted: [newVersion: number, lockVersion: number];
+  memoSaved: [newVersion: number, lockVersion: number];
 }>();
 
 const nameDraft = ref(props.cell.name);
@@ -77,8 +96,17 @@ const errorMsg = ref("");
 const saving = ref(false);
 const deleting = ref(false);
 const deleteErrorMsg = ref("");
+const memoDraft = ref(props.cell.memo);
+const memoSaving = ref(false);
+const memoErrorMsg = ref("");
 
-watch(() => props.cell.id, () => { nameDraft.value = props.cell.name; errorMsg.value = ""; deleteErrorMsg.value = ""; });
+watch(() => props.cell.id, () => {
+  nameDraft.value = props.cell.name;
+  errorMsg.value = "";
+  deleteErrorMsg.value = "";
+  memoDraft.value = props.cell.memo;
+  memoErrorMsg.value = "";
+});
 
 async function save() {
   if (!nameDraft.value.trim()) return;
@@ -127,6 +155,29 @@ async function deleteCell() {
     }
   } finally {
     deleting.value = false;
+  }
+}
+
+async function saveMemo() {
+  memoSaving.value = true;
+  memoErrorMsg.value = "";
+  try {
+    const result = await invoke<{ new_version: number; lock_version: number }>("set_cell_memo", {
+      harnessId: props.harnessId,
+      cellId: props.cell.id,
+      memo: memoDraft.value,
+      lockVersion: props.lockVersion,
+    });
+    emit("memoSaved", result.new_version, result.lock_version);
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes("lock_conflict")) {
+      memoErrorMsg.value = "他で編集が入りました。再読み込みしてください。";
+    } else {
+      memoErrorMsg.value = "エラーが発生しました。";
+    }
+  } finally {
+    memoSaving.value = false;
   }
 }
 </script>

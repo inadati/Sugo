@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue({ new_version: 2, lock_version: 1 }),
 }));
 
-const cell = { id: "c1", name: "old", prompt: "do the thing", status: "active", terminal: false };
+const cell = { id: "c1", name: "old", prompt: "do the thing", status: "active", terminal: false, memo: "" };
 
 describe("CellDetailPanel", () => {
   it("shows the cell prompt", () => {
@@ -79,7 +79,7 @@ describe("CellDetailPanel", () => {
       props: { harnessId: "h1", cell: { ...cell }, lockVersion: 0 },
     });
     await wrapper.find('[data-testid="name-input"]').setValue("editing...");
-    const other = { id: "c2", name: "second", prompt: "p2", status: "active", terminal: false };
+    const other = { id: "c2", name: "second", prompt: "p2", status: "active", terminal: false, memo: "" };
     await wrapper.setProps({ cell: other });
     expect((wrapper.find('[data-testid="name-input"]').element as HTMLInputElement).value).toBe("second");
   });
@@ -111,5 +111,45 @@ describe("CellDetailPanel", () => {
       harnessId: "h1", cellId: "c1", lockVersion: 0,
     });
     expect(wrapper.emitted("deleted")).toBeTruthy();
+  });
+
+  it("要望メモを保存すると set_cell_memo が呼ばれ memoSaved が emit される", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockResolvedValueOnce({ new_version: 3, lock_version: 2 });
+    const wrapper = mount(CellDetailPanel, {
+      props: {
+        harnessId: "h1",
+        cell: { id: "c1", name: "n", prompt: "p", status: "active", terminal: false, memo: "" },
+        lockVersion: 1,
+      },
+    });
+    await wrapper.find('[data-testid="memo-input"]').setValue("直してほしい");
+    await wrapper.find('[data-testid="memo-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(invoke).toHaveBeenCalledWith("set_cell_memo", {
+      harnessId: "h1",
+      cellId: "c1",
+      memo: "直してほしい",
+      lockVersion: 1,
+    });
+    expect(wrapper.emitted("memoSaved")).toEqual([[3, 2]]);
+  });
+
+  it("メモ保存で lock_conflict が返るとエラーメッセージを表示する", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockRejectedValueOnce("lock_conflict");
+    const wrapper = mount(CellDetailPanel, {
+      props: {
+        harnessId: "h1",
+        cell: { id: "c1", name: "n", prompt: "p", status: "active", terminal: false, memo: "" },
+        lockVersion: 1,
+      },
+    });
+    await wrapper.find('[data-testid="memo-input"]').setValue("x");
+    await wrapper.find('[data-testid="memo-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.find('[data-testid="memo-error"]').text()).toContain("他で編集が入りました");
   });
 });
