@@ -38,6 +38,9 @@ pub struct HarnessDetailDto {
     pub current_version: i64,
     pub lock_version: i64,
     pub has_draft: bool,
+    /// 権威である START マスの id（definition.start）。フロントは cells[0] で
+    /// 代用せず、必ずこの値で START を判定する。
+    pub start_cell_id: String,
     pub cells: Vec<CellDto>,
     pub edges: Vec<EdgeDto>,
     pub draft_diff: Vec<DraftCellDto>,
@@ -69,6 +72,12 @@ pub struct AddEdgeResultDto {
 
 #[derive(Debug, Serialize)]
 pub struct DeleteEdgeResultDto {
+    pub new_version: i64,
+    pub lock_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateEdgeResultDto {
     pub new_version: i64,
     pub lock_version: i64,
 }

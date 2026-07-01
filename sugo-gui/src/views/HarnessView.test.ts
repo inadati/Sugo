@@ -5,7 +5,7 @@ import HarnessView from "./HarnessView.vue";
 
 const mockDetail = vi.hoisted(() => ({
   harness_id: "h1", name: "my-harness", current_version: 1,
-  lock_version: 0, has_draft: true,
+  lock_version: 0, has_draft: true, start_cell_id: "c1",
   cells: [
     { id: "c1", name: "start", prompt: "do the thing", status: "active", terminal: false },
     { id: "c2", name: "draft-one", prompt: "", status: "draft", terminal: true },

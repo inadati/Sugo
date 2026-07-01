@@ -1,4 +1,4 @@
-use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, DeleteCellResultDto, DeleteEdgeResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto};
+use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, DeleteCellResultDto, DeleteEdgeResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::edge::{Edge, Guard};
@@ -102,6 +102,7 @@ pub async fn get_harness(
         current_version: status.current_version,
         lock_version,
         has_draft: status.has_draft,
+        start_cell_id: status.definition.start.clone(),
         cells,
         edges,
         draft_diff,
@@ -241,8 +242,12 @@ async fn rename_cell_inner(
     })
 }
 
-/// draft マスを削除する（楽観ロック付き）。
-/// draft 以外のマスや、そのマスへの参照エッジも同時に除去する。
+/// マスを削除する（楽観ロック付き）。
+///
+/// START マス（`definition.start`）は `cannot_delete_start` で拒否する。
+/// それ以外は draft/active を問わず削除でき、そのマスを端点とする
+/// 参照エッジ（from/to のいずれか一致）も同時に連鎖削除する。
+/// 実行中 run は board_version にピン留めされるため影響を受けない。
 #[tauri::command]
 pub async fn delete_cell(
     state: State<'_, AppState>,
@@ -267,14 +272,12 @@ async fn delete_cell_inner(
 
     let mut new_def = head.definition.clone();
 
-    let cell = new_def
-        .cells
-        .iter()
-        .find(|c| c.id == cell_id)
-        .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
-
-    if cell.status != CellStatus::Draft {
-        return Err("not_draft".to_string());
+    // START マスは削除禁止。それ以外は draft/active を問わず削除可。
+    if new_def.start == cell_id {
+        return Err("cannot_delete_start".to_string());
+    }
+    if !new_def.cells.iter().any(|c| c.id == cell_id) {
+        return Err(CoreError::NotFound(cell_id.clone()).to_string());
     }
 
     new_def.cells.retain(|c| c.id != cell_id);
@@ -472,6 +475,100 @@ async fn delete_edge_inner(
     })
 }
 
+/// エッジのラベル/ガードを変更する（from/to/old_label で特定・新 board_version・楽観ロック）。
+#[tauri::command]
+pub async fn update_edge(
+    state: State<'_, AppState>,
+    harness_id: String,
+    from: String,
+    to: String,
+    old_label: String,
+    new_label: String,
+    new_guard: Option<String>,
+    lock_version: i64,
+) -> Result<UpdateEdgeResultDto, String> {
+    update_edge_inner(state.repo.as_ref(), harness_id, from, to, old_label, new_label, new_guard, lock_version).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_edge_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    from: String,
+    to: String,
+    old_label: String,
+    new_label: String,
+    new_guard: Option<String>,
+    lock_version: i64,
+) -> Result<UpdateEdgeResultDto, String> {
+    let trimmed_label = new_label.trim();
+    if trimmed_label.is_empty() {
+        return Err("empty_label".to_string());
+    }
+
+    let (mut harness, head) = repo
+        .get(&harness_id)
+        .await
+        .map_err(map_core_error)?
+        .ok_or_else(|| CoreError::NotFound(harness_id.clone()).to_string())?;
+
+    let mut new_def = head.definition.clone();
+
+    let guard = new_guard
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .map(|expr| Guard { expr });
+
+    // ラベルを変更する場合、同一 from/to/new_label のエッジが既に存在すると
+    // (from,to,label) の一意不変条件（add_edge が duplicate_edge で守る）を
+    // 破壊するため拒否する。ラベル据え置き（ガードのみ変更）は自分自身と
+    // 衝突しうるので new_label != old_label のときだけ検査する。
+    if trimmed_label != old_label
+        && new_def
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && e.label == trimmed_label)
+    {
+        return Err("duplicate_edge".to_string());
+    }
+
+    let edge = new_def
+        .edges
+        .iter_mut()
+        .find(|e| e.from == from && e.to == to && e.label == old_label);
+    let edge = match edge {
+        Some(e) => e,
+        None => return Err("edge_not_found".to_string()),
+    };
+    edge.label = trimmed_label.to_string();
+    edge.guard = guard;
+
+    let new_version_no = harness.current_version + 1;
+    let now = chrono::Local::now().to_rfc3339();
+    let new_version = BoardVersion {
+        id: uuid::Uuid::new_v4().to_string(),
+        harness_id: harness_id.clone(),
+        version_no: new_version_no,
+        content_hash: content_hash(&new_def),
+        definition: new_def.clone(),
+        created_at: now.clone(),
+    };
+
+    harness.current_version = new_version_no;
+    harness.has_draft = new_def.cells.iter().any(|c| c.status == CellStatus::Draft);
+    harness.lock_version = lock_version + 1;
+    harness.updated_at = now;
+
+    repo.append_version(&harness, &new_version, lock_version)
+        .await
+        .map_err(map_core_error)?;
+
+    Ok(UpdateEdgeResultDto {
+        new_version: new_version_no,
+        lock_version: harness.lock_version,
+    })
+}
+
 /// 指定ハーネスのアクティブ実行（status = running かつ直近300秒以内にハートビートあり）を返す。
 /// project_path の末尾コンポーネントが Nipper タブ名になる。
 #[tauri::command]
@@ -615,7 +712,7 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner};
+    use super::{add_cell_inner, add_edge_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, trash_harness_inner, update_edge_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -928,14 +1025,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_cell_inner_rejects_non_draft_cell() {
+    async fn delete_cell_inner_rejects_start_cell() {
         let repo = InMemoryHarnessRepository::new();
-        let hid = seed_single_cell(&repo).await;
-
+        let hid = seed_single_cell(&repo).await; // start = "c1"
         let err = delete_cell_inner(&repo, hid, "c1".into(), 0)
             .await
             .unwrap_err();
-        assert_eq!(err, "not_draft");
+        assert_eq!(err, "cannot_delete_start");
+    }
+
+    #[tokio::test]
+    async fn delete_cell_inner_removes_active_non_start_cell_and_edges() {
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        // c1(start) -> draft のエッジを張る
+        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "e".into(), None, lock)
+            .await
+            .unwrap();
+        // draft を active に昇格させず、非START の draft_id を削除（active/draft 問わず削除可を確認）
+        let del = delete_cell_inner(&repo, hid.clone(), draft_id.clone(), add.lock_version)
+            .await
+            .unwrap();
+        assert_eq!(del.lock_version, add.lock_version + 1);
+        let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
+        assert!(!bv.definition.cells.iter().any(|c| c.id == draft_id));
+        assert!(bv.definition.edges.is_empty()); // 参照エッジも連鎖削除
     }
 
     // ── add_edge / delete_edge（inner を直接実行）──────────────────────────
@@ -1087,6 +1201,107 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, "edge_not_found");
+    }
+
+    // ── update_edge（inner を直接実行）──────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_edge_inner_changes_label_and_guard() {
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "old".into(), None, lock)
+            .await
+            .unwrap();
+
+        let res = update_edge_inner(
+            &repo, hid.clone(), "c1".into(), draft_id.clone(),
+            "old".into(), "new".into(), Some("続ける".into()), add.lock_version,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.lock_version, add.lock_version + 1);
+
+        let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
+        let e = &bv.definition.edges[0];
+        assert_eq!(e.label, "new");
+        assert_eq!(e.guard.as_ref().unwrap().expr, "続ける");
+    }
+
+    #[tokio::test]
+    async fn update_edge_inner_empty_new_label_rejected() {
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
+            .await
+            .unwrap();
+        let err = update_edge_inner(
+            &repo, hid, "c1".into(), draft_id, "x".into(), "   ".into(), None, add.lock_version,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "empty_label");
+    }
+
+    #[tokio::test]
+    async fn update_edge_inner_unknown_edge_returns_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let err = update_edge_inner(
+            &repo, hid, "c1".into(), draft_id, "nope".into(), "y".into(), None, lock,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "edge_not_found");
+    }
+
+    #[tokio::test]
+    async fn update_edge_inner_empty_guard_becomes_none() {
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), Some("g".into()), lock)
+            .await
+            .unwrap();
+        update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), "x".into(), Some("  ".into()), add.lock_version)
+            .await
+            .unwrap();
+        let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
+        assert!(bv.definition.edges[0].guard.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_edge_inner_rejects_relabel_to_existing() {
+        // 同一 from/to に "a" と "b" の2本があるとき、"a" を "b" に改名しようとすると
+        // (from,to,label) 重複になるため duplicate_edge で拒否される。
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let a = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "a".into(), None, lock)
+            .await
+            .unwrap();
+        let b = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "b".into(), None, a.lock_version)
+            .await
+            .unwrap();
+        let err = update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "a".into(), "b".into(), None, b.lock_version)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "duplicate_edge");
+        // 両エッジは無傷（2本のまま）
+        let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
+        assert_eq!(bv.definition.edges.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_edge_inner_allows_guard_only_change_with_same_label() {
+        // ラベル据え置き（自分自身との衝突）は許容され、ガードのみ変更できる。
+        let repo = InMemoryHarnessRepository::new();
+        let (hid, draft_id, lock) = seed_two_cells(&repo).await;
+        let a = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
+            .await
+            .unwrap();
+        update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), "x".into(), Some("g".into()), a.lock_version)
+            .await
+            .unwrap();
+        let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
+        assert_eq!(bv.definition.edges[0].guard.as_ref().unwrap().expr, "g");
     }
 
     // ── trash_harness（inner）────────────────────────────────────────────────
