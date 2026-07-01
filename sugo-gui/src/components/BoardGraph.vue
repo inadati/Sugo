@@ -1,5 +1,5 @@
 <template>
-  <div ref="container" class="relative w-full h-full bg-gray-50 rounded border">
+  <div ref="container" tabindex="0" class="relative w-full h-full bg-gray-50 rounded border outline-none">
     <!-- ピンオーバーレイ（pointer-events-none でグラフ操作を透過） -->
     <div class="absolute inset-0 pointer-events-none" style="z-index: 10; overflow: hidden;">
       <div
@@ -19,6 +19,29 @@
         " />
       </div>
     </div>
+
+    <!-- 接続ハンドル（ホバー中ノードの右縁。ここからドラッグして線を引く） -->
+    <div
+      v-if="handle"
+      data-testid="connect-handle"
+      class="absolute z-20"
+      :style="{ left: handle.x + 'px', top: handle.y + 'px', transform: 'translate(-50%, -50%)' }"
+      @mousedown.stop.prevent="startConnect"
+      title="ドラッグして接続"
+    >
+      <div class="w-4 h-4 rounded-full bg-orange-500 border-2 border-white shadow cursor-crosshair hover:scale-125 transition-transform" />
+    </div>
+
+    <!-- ノード名インライン編集 -->
+    <NodeNameEditor
+      v-if="nodeEditor"
+      :initial-name="nodeEditor.name"
+      :x="nodeEditor.x"
+      :y="nodeEditor.y"
+      :width="nodeEditor.width"
+      @commit="onNodeNameCommit"
+      @cancel="nodeEditor = null"
+    />
   </div>
 </template>
 
@@ -26,8 +49,12 @@
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import cytoscape from "cytoscape";
 import cytoscapeDagre from "cytoscape-dagre";
+// @ts-expect-error cytoscape-edgehandles は型を同梱せず、JS 実体が ambient 宣言より優先されるため
+import edgehandles from "cytoscape-edgehandles";
+import NodeNameEditor from "./NodeNameEditor.vue";
 
 cytoscape.use(cytoscapeDagre as cytoscape.Ext);
+cytoscape.use(edgehandles as cytoscape.Ext);
 
 interface CellData {
   id: string;
@@ -61,21 +88,28 @@ const props = defineProps<{
   edges: EdgeData[];
   startCellId: string;
   activeRuns?: ActiveRunData[];
-  editMode?: boolean;
 }>();
 
 const emit = defineEmits<{
   select: [cellId: string];
-  connect: [payload: { from: string; to: string }];
+  connect: [payload: { from: string; to: string; x: number; y: number }];
+  edgeEdit: [payload: { from: string; to: string; label: string; guard: string | null; x: number; y: number }];
   edgeDelete: [payload: { from: string; to: string; label: string; guard: string | null }];
+  nodeDelete: [cellId: string];
+  nodeRename: [payload: { cellId: string; name: string }];
 }>();
-
-// 編集モードでエッジ接続の起点に選んだノード
-const pendingSourceId = ref<string | null>(null);
 
 const container = ref<HTMLElement | null>(null);
 let cy: cytoscape.Core | null = null;
+let eh: cytoscape.EdgehandlesInstance | null = null;
 const renderedMarkers = ref<RenderedMarker[]>([]);
+
+// 現在選択中の要素（Delete キー対象）
+const selected = ref<{ type: "node" | "edge"; id: string } | null>(null);
+// 接続ハンドルのオーバーレイ位置
+const handle = ref<{ x: number; y: number; nodeId: string } | null>(null);
+// ノード名インライン編集の状態
+const nodeEditor = ref<{ cellId: string; name: string; x: number; y: number; width: number } | null>(null);
 
 // ── レイアウト永続化 ──────────────────────────────────────────────────
 
@@ -190,8 +224,23 @@ const STYLES: cytoscape.CytoscapeOptions["style"] = [
     style: { "border-color": "#3b82f6", "border-width": "3px" },
   },
   {
-    selector: "node.connect-source",
+    // エッジ選択の視覚強調（Delete 対象を明示）
+    selector: "edge:selected",
+    style: { "line-color": "#3b82f6", "target-arrow-color": "#3b82f6", width: "3.5px" },
+  },
+  {
+    // エッジ描画中のプレビュー・起点/対象ノードの強調（Excalidraw 風）
+    selector: ".eh-source, .eh-target, .eh-hover",
     style: { "border-color": "#f97316", "border-width": "4px", "background-color": "#fff7ed" },
+  },
+  {
+    selector: ".eh-preview, .eh-ghost-edge",
+    style: {
+      "line-color": "#f97316",
+      "target-arrow-color": "#f97316",
+      "target-arrow-shape": "triangle",
+      "line-style": "dashed",
+    },
   },
   {
     selector: "edge",
@@ -301,63 +350,133 @@ function initCy() {
     layout: { name: "null" },
     wheelSensitivity: 0.3,
   });
+  // 単一クリック: ノード=選択+詳細表示 / エッジ=選択
   cy.on("tap", "node", (evt) => {
-    const id = evt.target.id() as string;
-    if (!props.editMode) {
-      emit("select", id);
-      return;
-    }
-    // 編集モード: 1つ目のノードで起点、2つ目のノードで接続
-    if (!pendingSourceId.value) {
-      setPendingSource(id);
-    } else if (pendingSourceId.value === id) {
-      clearPendingSource(); // 同じノード再タップでキャンセル
-    } else {
-      const from = pendingSourceId.value;
-      clearPendingSource();
-      emit("connect", { from, to: id });
-    }
+    selected.value = { type: "node", id: evt.target.id() as string };
+    emit("select", evt.target.id() as string);
   });
   cy.on("tap", "edge", (evt) => {
-    if (!props.editMode) return;
+    selected.value = { type: "edge", id: evt.target.id() as string };
+  });
+  // 背景クリックで選択解除
+  cy.on("tap", (evt) => {
+    if (evt.target === cy) selected.value = null;
+  });
+
+  // ダブルクリック: ノード=その場改名 / エッジ=ラベル+ガード編集
+  cy.on("dbltap", "node", (evt) => showNodeEditor(evt.target as cytoscape.NodeSingular));
+  cy.on("dbltap", "edge", (evt) => {
     const d = evt.target.data();
+    const screen = toScreen(evt.renderedPosition ?? { x: 0, y: 0 });
+    emit("edgeEdit", {
+      from: d.source as string,
+      to: d.target as string,
+      label: d.origLabel as string,
+      guard: (d.origGuard as string | null) ?? null,
+      x: screen.x,
+      y: screen.y,
+    });
+  });
+
+  cy.on("dragfree", "node", () => {
+    savePositions();
+    computeMarkerPositions();
+  });
+  // パン・ズーム・ドラッグ中は接続ハンドル・改名入力を退避（古い座標に残さない）
+  cy.on("viewport", () => { handle.value = null; nodeEditor.value = null; computeMarkerPositions(); });
+  cy.on("drag", "node", () => { handle.value = null; nodeEditor.value = null; });
+
+  // 接続ハンドル: ノードにホバーで右縁に表示
+  cy.on("mouseover", "node", (evt) => updateHandle(evt.target as cytoscape.NodeSingular));
+  cy.on("mouseout", "node", () => { handle.value = null; });
+
+  // ── エッジハンドル（ハンドルからドラッグして接続）──────────────────
+  // ドローモードは使わず、接続ハンドルの mousedown で eh.start() を呼ぶ。
+  eh = cy.edgehandles({
+    snap: true,
+    canConnect: (source, target) => !source.same(target),
+    edgeParams: () => ({}),
+  });
+  // ドラッグ完了で仮エッジが追加される。永続化はバックエンド経由で行うため
+  // 仮エッジは即削除し、ラベル入力のため connect を通知する。
+  cy.on("ehcomplete", (evt, source, target, addedEdge) => {
+    (addedEdge as cytoscape.EdgeSingular).remove();
+    const oe = (evt as unknown as { originalEvent?: MouseEvent }).originalEvent;
+    emit("connect", {
+      from: source.id() as string,
+      to: target.id() as string,
+      x: oe?.clientX ?? window.innerWidth / 2,
+      y: oe?.clientY ?? window.innerHeight / 2,
+    });
+  });
+
+  placeNodes();
+}
+
+/// cytoscape のレンダリング座標（コンテナ相対）を画面座標へ変換する。
+function toScreen(rp: { x: number; y: number }): { x: number; y: number } {
+  const rect = container.value?.getBoundingClientRect();
+  return { x: (rect?.left ?? 0) + rp.x, y: (rect?.top ?? 0) + rp.y };
+}
+
+/// ホバー中ノードの右縁に接続ハンドルを表示する。
+function updateHandle(node: cytoscape.NodeSingular) {
+  const pos = node.renderedPosition();
+  const halfW = node.renderedWidth() / 2;
+  handle.value = { x: pos.x + halfW, y: pos.y, nodeId: node.id() as string };
+}
+
+/// 接続ハンドルの mousedown からエッジ描画ジェスチャを開始する。
+function startConnect() {
+  if (!handle.value || !eh || !cy) return;
+  const node = cy.getElementById(handle.value.nodeId);
+  eh.start(node as cytoscape.NodeSingular);
+  handle.value = null;
+}
+
+/// ノード名インライン編集を開く。
+function showNodeEditor(node: cytoscape.NodeSingular) {
+  const pos = node.renderedPosition();
+  nodeEditor.value = {
+    cellId: node.id() as string,
+    name: props.cells.find((c) => c.id === node.id())?.name ?? "",
+    x: pos.x,
+    y: pos.y,
+    width: node.renderedWidth(),
+  };
+}
+
+function onNodeNameCommit(name: string) {
+  if (nodeEditor.value) emit("nodeRename", { cellId: nodeEditor.value.cellId, name });
+  nodeEditor.value = null;
+}
+
+/// Delete / Backspace で選択要素を削除する。
+function onKeydown(e: KeyboardEvent) {
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
+  if ((e.target as HTMLElement)?.tagName === "INPUT") return; // 入力中は無視
+  if (!selected.value || !cy) return;
+  const el = cy.getElementById(selected.value.id);
+  if (!el || el.length === 0) return;
+  if (selected.value.type === "edge") {
+    const d = el.data();
     emit("edgeDelete", {
       from: d.source as string,
       to: d.target as string,
       label: d.origLabel as string,
       guard: (d.origGuard as string | null) ?? null,
     });
-  });
-  // 背景タップで起点選択を解除
-  cy.on("tap", (evt) => {
-    if (evt.target === cy && props.editMode) clearPendingSource();
-  });
-  cy.on("dragfree", "node", () => {
-    savePositions();
-    computeMarkerPositions();
-  });
-  // パン・ズーム時もピン位置を追従
-  cy.on("viewport", computeMarkerPositions);
-  placeNodes();
-}
-
-function setPendingSource(id: string) {
-  if (!cy) return;
-  clearPendingSource();
-  pendingSourceId.value = id;
-  cy.getElementById(id).addClass("connect-source");
-}
-
-function clearPendingSource() {
-  if (cy && pendingSourceId.value) {
-    cy.getElementById(pendingSourceId.value).removeClass("connect-source");
+  } else {
+    emit("nodeDelete", selected.value.id);
   }
-  pendingSourceId.value = null;
+  selected.value = null;
 }
 
 function refresh() {
   if (!cy) return;
-  clearPendingSource();
+  handle.value = null;
+  nodeEditor.value = null;
+  selected.value = null;
   cy.elements().remove();
   cy.add(buildElements());
   placeNodes();
@@ -373,17 +492,19 @@ function onResize() {
 onMounted(() => {
   initCy();
   window.addEventListener("resize", onResize);
+  container.value?.addEventListener("keydown", onKeydown);
 });
 onUnmounted(() => {
   window.removeEventListener("resize", onResize);
+  container.value?.removeEventListener("keydown", onKeydown);
+  eh?.destroy();
+  eh = null;
   cy?.destroy();
   cy = null;
 });
 
 watch(() => [props.cells, props.edges, props.startCellId], refresh, { deep: true });
 watch(() => props.activeRuns, computeMarkerPositions, { deep: true });
-// 編集モードを抜けたら起点選択を解除
-watch(() => props.editMode, (on) => { if (!on) clearPendingSource(); });
 
 defineExpose({ buildLabel, buildElements });
 </script>

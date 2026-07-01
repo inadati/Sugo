@@ -83,4 +83,33 @@ describe("CellDetailPanel", () => {
     await wrapper.setProps({ cell: other });
     expect((wrapper.find('[data-testid="name-input"]').element as HTMLInputElement).value).toBe("second");
   });
+
+  it("shows delete button for a non-START active cell", () => {
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0, isStart: false },
+    });
+    expect(wrapper.find('[data-testid="cell-delete"]').exists()).toBe(true);
+  });
+
+  it("hides delete button and calls delete_cell for START cell", () => {
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0, isStart: true },
+    });
+    expect(wrapper.find('[data-testid="cell-delete"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("START マスは削除できません。");
+  });
+
+  it("calls delete_cell and emits deleted on delete", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0, isStart: false },
+    });
+    await wrapper.find('[data-testid="cell-delete"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invoke).toHaveBeenCalledWith("delete_cell", {
+      harnessId: "h1", cellId: "c1", lockVersion: 0,
+    });
+    expect(wrapper.emitted("deleted")).toBeTruthy();
+  });
 });

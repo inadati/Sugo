@@ -39,8 +39,8 @@
     <label class="block text-xs text-gray-500 mb-1">プロンプト</label>
     <pre class="text-sm bg-gray-50 border border-gray-200 rounded p-3 whitespace-pre-wrap break-words">{{ cell.prompt || "（未登録）" }}</pre>
 
-    <!-- ドラフト削除 -->
-    <div v-if="cell.status === 'draft'" class="mt-6 border-t border-gray-100 pt-4">
+    <!-- マス削除（START 以外は draft/active を問わず削除可） -->
+    <div v-if="!isStart" class="mt-6 border-t border-gray-100 pt-4">
       <button
         data-testid="cell-delete"
         class="w-full px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100 disabled:opacity-50 text-sm"
@@ -49,6 +49,7 @@
       >このマスを削除</button>
       <p v-if="deleteErrorMsg" class="text-red-500 text-sm mt-1">{{ deleteErrorMsg }}</p>
     </div>
+    <p v-else class="mt-6 border-t border-gray-100 pt-4 text-xs text-gray-400">START マスは削除できません。</p>
   </div>
 </template>
 
@@ -64,7 +65,7 @@ interface CellData {
   terminal: boolean;
 }
 
-const props = defineProps<{ harnessId: string; cell: CellData; lockVersion: number }>();
+const props = defineProps<{ harnessId: string; cell: CellData; lockVersion: number; isStart?: boolean }>();
 const emit = defineEmits<{
   close: [];
   renamed: [newVersion: number, lockVersion: number];
@@ -119,6 +120,8 @@ async function deleteCell() {
     const msg = String(e);
     if (msg.includes("lock_conflict")) {
       deleteErrorMsg.value = "他で編集が入りました。再読み込みしてください。";
+    } else if (msg.includes("cannot_delete_start")) {
+      deleteErrorMsg.value = "START マスは削除できません。";
     } else {
       deleteErrorMsg.value = "削除に失敗しました。";
     }
