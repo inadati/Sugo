@@ -61,9 +61,17 @@ const props = defineProps<{
   edges: EdgeData[];
   startCellId: string;
   activeRuns?: ActiveRunData[];
+  editMode?: boolean;
 }>();
 
-const emit = defineEmits<{ select: [cellId: string] }>();
+const emit = defineEmits<{
+  select: [cellId: string];
+  connect: [payload: { from: string; to: string }];
+  edgeDelete: [payload: { from: string; to: string; label: string; guard: string | null }];
+}>();
+
+// 編集モードでエッジ接続の起点に選んだノード
+const pendingSourceId = ref<string | null>(null);
 
 const container = ref<HTMLElement | null>(null);
 let cy: cytoscape.Core | null = null;
@@ -126,6 +134,9 @@ function buildElements(): cytoscape.ElementDefinition[] {
       source: e.from,
       target: e.to,
       label: e.guard ? `${e.label} [${e.guard}]` : e.label,
+      // 削除時に元エッジを特定するための生データ
+      origLabel: e.label,
+      origGuard: e.guard,
     },
   }));
 
@@ -179,6 +190,10 @@ const STYLES: cytoscape.CytoscapeOptions["style"] = [
     style: { "border-color": "#3b82f6", "border-width": "3px" },
   },
   {
+    selector: "node.connect-source",
+    style: { "border-color": "#f97316", "border-width": "4px", "background-color": "#fff7ed" },
+  },
+  {
     selector: "edge",
     style: {
       width: "2px",
@@ -226,16 +241,46 @@ function computeMarkerPositions() {
 
 // ── 配置決定ロジック ─────────────────────────────────────────────────
 
+/// 保存済み配置に無い新規ノードを、既存レイアウトを崩さずに配置する。
+///
+/// 既存ノード群の外接矩形の「下」に、左詰めで横に並べて置く。これにより
+/// マス追加時に dagre 全再計算が走って既存配置が破壊される問題（#28）を防ぐ。
+function placeNewNodes(saved: PositionMap, missingIds: string[]) {
+  if (!cy) return;
+  const positioned = cy.nodes().filter((n) => saved[n.id()] != null);
+
+  let baseX = 0;
+  let baseY = 0;
+  if (positioned.length > 0) {
+    const bb = positioned.boundingBox();
+    baseX = bb.x1;
+    baseY = bb.y2 + 90; // 既存群の下に余白を空けて配置
+  }
+
+  const GAP_X = 200;
+  missingIds.forEach((id, i) => {
+    cy!.getElementById(id).position({ x: baseX + i * GAP_X, y: baseY });
+  });
+}
+
 function placeNodes() {
   if (!cy) return;
   const saved = loadPositions();
-  const allCovered = props.cells.every((c) => saved?.[c.id]);
+  const missingIds = props.cells
+    .filter((c) => !saved?.[c.id])
+    .map((c) => c.id);
 
-  if (saved && allCovered) {
+  if (saved && missingIds.length < props.cells.length) {
+    // 既存の手動配置がある: それを保持し、未配置ノードのみ追加配置する
     applyPositions(saved);
+    if (missingIds.length > 0) {
+      placeNewNodes(saved, missingIds);
+      savePositions();
+    }
     cy.fit(undefined, 40);
     computeMarkerPositions();
   } else {
+    // 保存が全く無い（初回）→ dagre で自動レイアウト
     const layout = cy.layout(DAGRE_OPTIONS);
     layout.one("layoutstop", () => {
       savePositions();
@@ -257,7 +302,35 @@ function initCy() {
     wheelSensitivity: 0.3,
   });
   cy.on("tap", "node", (evt) => {
-    emit("select", evt.target.id() as string);
+    const id = evt.target.id() as string;
+    if (!props.editMode) {
+      emit("select", id);
+      return;
+    }
+    // 編集モード: 1つ目のノードで起点、2つ目のノードで接続
+    if (!pendingSourceId.value) {
+      setPendingSource(id);
+    } else if (pendingSourceId.value === id) {
+      clearPendingSource(); // 同じノード再タップでキャンセル
+    } else {
+      const from = pendingSourceId.value;
+      clearPendingSource();
+      emit("connect", { from, to: id });
+    }
+  });
+  cy.on("tap", "edge", (evt) => {
+    if (!props.editMode) return;
+    const d = evt.target.data();
+    emit("edgeDelete", {
+      from: d.source as string,
+      to: d.target as string,
+      label: d.origLabel as string,
+      guard: (d.origGuard as string | null) ?? null,
+    });
+  });
+  // 背景タップで起点選択を解除
+  cy.on("tap", (evt) => {
+    if (evt.target === cy && props.editMode) clearPendingSource();
   });
   cy.on("dragfree", "node", () => {
     savePositions();
@@ -268,8 +341,23 @@ function initCy() {
   placeNodes();
 }
 
+function setPendingSource(id: string) {
+  if (!cy) return;
+  clearPendingSource();
+  pendingSourceId.value = id;
+  cy.getElementById(id).addClass("connect-source");
+}
+
+function clearPendingSource() {
+  if (cy && pendingSourceId.value) {
+    cy.getElementById(pendingSourceId.value).removeClass("connect-source");
+  }
+  pendingSourceId.value = null;
+}
+
 function refresh() {
   if (!cy) return;
+  clearPendingSource();
   cy.elements().remove();
   cy.add(buildElements());
   placeNodes();
@@ -294,6 +382,8 @@ onUnmounted(() => {
 
 watch(() => [props.cells, props.edges, props.startCellId], refresh, { deep: true });
 watch(() => props.activeRuns, computeMarkerPositions, { deep: true });
+// 編集モードを抜けたら起点選択を解除
+watch(() => props.editMode, (on) => { if (!on) clearPendingSource(); });
 
 defineExpose({ buildLabel, buildElements });
 </script>

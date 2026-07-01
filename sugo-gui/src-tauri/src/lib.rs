@@ -3,8 +3,8 @@ mod dto;
 mod state;
 
 use commands::{
-    add_cell, delete_cell, get_active_runs, get_harness, list_harnesses, list_trash, purge_harness,
-    rename_cell, restore_harness, trash_harness,
+    add_cell, add_edge, delete_cell, delete_edge, get_active_runs, get_harness, list_harnesses,
+    list_trash, purge_harness, rename_cell, restore_harness, trash_harness,
 };
 use state::AppState;
 use sugo_core::ports::repository::HarnessRepository;
@@ -35,6 +35,8 @@ pub fn run() {
             add_cell,
             rename_cell,
             delete_cell,
+            add_edge,
+            delete_edge,
             get_active_runs,
             trash_harness,
             restore_harness,

@@ -6,10 +6,25 @@
         <h2 class="text-xl font-semibold">{{ detail.name }}</h2>
         <p class="text-sm text-gray-400">v{{ detail.current_version }}</p>
       </div>
-      <button
-        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-        @click="showAddCell = true"
-      >+ マスを追加</button>
+      <div class="flex items-center gap-2">
+        <button
+          data-testid="toggle-edit"
+          class="px-4 py-2 rounded border"
+          :class="editMode
+            ? 'bg-orange-500 text-white border-orange-500 hover:bg-orange-600'
+            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'"
+          @click="editMode = !editMode"
+        >{{ editMode ? '編集モード: ON' : '編集モード' }}</button>
+        <button
+          class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          @click="showAddCell = true"
+        >+ マスを追加</button>
+      </div>
+    </div>
+
+    <!-- 編集モードの操作ヒント -->
+    <div v-if="editMode" class="shrink-0 mb-3 bg-orange-50 border border-orange-200 rounded px-3 py-2 text-sm text-orange-800">
+      編集モード: ノードを2つ順にクリックするとエッジを追加できます（起点→終点）。エッジをクリックすると削除できます。
     </div>
 
     <!-- ドラフト差分 -->
@@ -28,7 +43,10 @@
       :edges="detail.edges"
       :start-cell-id="detail.cells[0]?.id ?? ''"
       :active-runs="activeRuns"
+      :edit-mode="editMode"
       @select="onSelectCell"
+      @connect="onConnect"
+      @edge-delete="onEdgeDelete"
     />
 
     <!-- マス詳細パネル: パネル外クリックで閉じるオーバーレイ -->
@@ -52,6 +70,19 @@
       @close="showAddCell = false"
       @added="onCellAdded"
     />
+
+    <!-- エッジ追加ダイアログ -->
+    <EdgeDialog
+      v-if="pendingEdge"
+      :harness-id="detail.harness_id"
+      :from="pendingEdge.from"
+      :to="pendingEdge.to"
+      :from-name="cellName(pendingEdge.from)"
+      :to-name="cellName(pendingEdge.to)"
+      :lock-version="lockVersion"
+      @close="pendingEdge = null"
+      @added="onEdgeAdded"
+    />
   </div>
   <div v-else class="text-gray-400">読み込み中...</div>
 </template>
@@ -63,6 +94,7 @@ import { useRouter } from "vue-router";
 import BoardGraph from "../components/BoardGraph.vue";
 import AddCellDialog from "../components/AddCellDialog.vue";
 import CellDetailPanel from "../components/CellDetailPanel.vue";
+import EdgeDialog from "../components/EdgeDialog.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -91,6 +123,8 @@ const lockVersion = ref(0);
 const showAddCell = ref(false);
 const selectedCellId = ref<string | null>(null);
 const activeRuns = ref<ActiveRun[]>([]);
+const editMode = ref(false);
+const pendingEdge = ref<{ from: string; to: string } | null>(null);
 
 const selectedCell = computed<Cell | null>(
   () => detail.value?.cells.find((c) => c.id === selectedCellId.value) ?? null
@@ -108,6 +142,44 @@ async function load() {
 
 function onSelectCell(cellId: string) {
   selectedCellId.value = cellId;
+}
+
+function cellName(cellId: string): string {
+  return detail.value?.cells.find((c) => c.id === cellId)?.name ?? cellId;
+}
+
+function onConnect(payload: { from: string; to: string }) {
+  pendingEdge.value = payload;
+}
+
+async function onEdgeAdded(_newVersion: number, newLockVersion: number) {
+  pendingEdge.value = null;
+  lockVersion.value = newLockVersion;
+  await load();
+}
+
+async function onEdgeDelete(payload: { from: string; to: string; label: string; guard: string | null }) {
+  const from = cellName(payload.from);
+  const to = cellName(payload.to);
+  if (!confirm(`エッジ「${payload.label}」（${from} → ${to}）を削除しますか？`)) return;
+  try {
+    const result = await invoke<{ new_version: number; lock_version: number }>("delete_edge", {
+      harnessId: props.id,
+      from: payload.from,
+      to: payload.to,
+      label: payload.label,
+      lockVersion: lockVersion.value,
+    });
+    lockVersion.value = result.lock_version;
+    await load();
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes("lock_conflict")) {
+      alert("他で編集が入りました。再読み込みしてください。");
+    } else {
+      alert("エッジの削除に失敗しました。");
+    }
+  }
 }
 
 async function onCellAdded(_newVersion: number, newLockVersion: number) {

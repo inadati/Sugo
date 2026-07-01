@@ -22,7 +22,7 @@ const sampleCells = [
 const sampleEdges = [{ from: "c1", to: "c2", label: "next", guard: null }];
 
 type CellData = (typeof sampleCells)[0];
-type El = { data: { id?: string; label?: string } };
+type El = { data: { id?: string; label?: string; origLabel?: string; origGuard?: string | null } };
 
 describe("BoardGraph", () => {
   it("renders without crashing", () => {
@@ -67,5 +67,17 @@ describe("BoardGraph", () => {
     const vm = wrapper.vm as { buildElements: () => El[] };
     const edge = vm.buildElements().find((e) => e.data.id === "e-0");
     expect(edge?.data.label).toBe("next [x > 0]");
+  });
+
+  it("carries original label and guard on edge data for deletion", () => {
+    const edges = [{ from: "c1", to: "c2", label: "next", guard: "続ける" }];
+    const wrapper = mount(BoardGraph, {
+      props: { harnessId: "h1", cells: sampleCells, edges, startCellId: "c1" },
+    });
+    const vm = wrapper.vm as { buildElements: () => El[] };
+    const edge = vm.buildElements().find((e) => e.data.id === "e-0");
+    // 表示ラベルは装飾されるが、削除特定用の生データは元のまま
+    expect(edge?.data.origLabel).toBe("next");
+    expect(edge?.data.origGuard).toBe("続ける");
   });
 });
