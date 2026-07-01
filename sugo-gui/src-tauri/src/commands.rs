@@ -334,8 +334,9 @@ async fn set_cell_memo_inner(
         .iter_mut()
         .find(|c| c.id == cell_id)
         .ok_or_else(|| CoreError::NotFound(cell_id.clone()).to_string())?;
-    cell.request_memo = memo.clone();
-    if !memo.trim().is_empty() && cell.status == CellStatus::Active {
+    let trimmed_memo = memo.trim().to_string();
+    cell.request_memo = trimmed_memo.clone();
+    if !trimmed_memo.is_empty() && cell.status == CellStatus::Active {
         cell.status = CellStatus::Draft;
     }
 
@@ -1190,6 +1191,22 @@ mod tests {
         let hid = seed_single_cell(&repo).await;
 
         set_cell_memo_inner(&repo, hid.clone(), "c1".into(), "".into(), 0)
+            .await
+            .unwrap();
+
+        let (h2, bv2) = repo.get(&hid).await.unwrap().unwrap();
+        let c1 = bv2.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(c1.request_memo, "");
+        assert_eq!(c1.status, CellStatus::Active);
+        assert!(!h2.has_draft);
+    }
+
+    #[tokio::test]
+    async fn set_cell_memo_inner_whitespace_only_memo_is_treated_as_empty() {
+        let repo = InMemoryHarnessRepository::new();
+        let hid = seed_single_cell(&repo).await;
+
+        set_cell_memo_inner(&repo, hid.clone(), "c1".into(), "   ".into(), 0)
             .await
             .unwrap();
 
