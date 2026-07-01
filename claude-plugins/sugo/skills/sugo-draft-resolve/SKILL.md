@@ -25,18 +25,24 @@ tools: []
 
 ### 2. ドラフトセルのプロンプトを起草する
 
-対象ハーネスの `sugo_status(harness_id)` で `draft_diff` を確認する。
+対象ハーネスの `sugo_status(harness_id)` で `draft_diff` を確認する。`draft_diff` の各エントリは
+`{cell_id, name, memo}` を持つ。
 
 プロンプト起草のルール:
 - ハーネス全体の構造・他のセルとの整合性を踏まえて起草する
-- draft セルは必ずプロンプトを充填する（空のままにしない）
-- このセルが担う役割・次のセルへの接続・期待する成果物を明確に書く
+- **`memo` が空文字の場合**（新規追加されたセル）: プロンプトは必ず充填する（空のままにしない）。
+  このセルが担う役割・次のセルへの接続・期待する成果物を明確に書く
+- **`memo` が非空の場合**（既存セルへの改訂依頼）: 現在の `prompt`（`sugo_status` の
+  `cells[].prompt` は概要のみのため、詳細プロンプトが必要な場合は `sugo_edit_cell` で
+  対象セルを直接読む）と `memo` の内容を踏まえてプロンプトを改訂する。memo の要望を
+  そのまま転記するのではなく、既存プロンプトの文脈に合わせて自然に反映する
 
 ### 3. `sugo_update_harness` で一括適用する
 
 draft セルすべてに以下を設定して1回のツール呼び出しで送信する:
-- `prompt`: 充填したプロンプト
+- `prompt`: 充填・改訂したプロンプト
 - `status`: `"active"`
+- `memo`: `""`（メモ由来の改訂だった場合、対応済みとして必ずクリアする）
 
 `expected_lock_version` は `sugo_status(harness_id)` で取得した値を使う。
 
@@ -45,7 +51,7 @@ draft セルすべてに以下を設定して1回のツール呼び出しで送�
   "harness_id": "<id>",
   "expected_lock_version": <lock_version>,
   "cell_changes": [
-    { "cell_id": "<draft_cell_id>", "prompt": "<充填プロンプト>", "status": "active" }
+    { "cell_id": "<draft_cell_id>", "prompt": "<充填/改訂プロンプト>", "status": "active", "memo": "" }
   ]
 }
 ```
