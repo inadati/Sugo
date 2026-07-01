@@ -33,9 +33,20 @@ tools: []
 - `start` セルや `terminal` セルの変更
 - 複数セルにまたがる一括変更
 
-### 4. 適用するツール
+### 4. request_memo の残留に注意する
+
+対象セルは、人間が残した `request_memo`（AIへのプロンプト改訂依頼メモ、非空なら `status: Draft`）を持っている可能性がある。
+プロンプトを編集する前に、`sugo_get_cell(harness_id, cell_id)` で `memo` フィールドを確認すること。
+
+- `memo` が非空のセルのプロンプトを編集する場合、`sugo_edit_cell` だけを使うと `memo` が古いまま残留する（`sugo_edit_cell` には memo をクリアする手段がない）。
+  この場合は `sugo_update_harness` の `cell_changes` に `prompt` と `memo: ""` を同時に渡し、明示的にメモをクリアすること。
+- ハーネスが `has_draft: true` の場合は、先に `sugo:sugo-draft-resolve` スキルに従って draft セルを解決してから作業する。
+
+### 5. 適用するツール
 
 | 変更内容 | 使用ツール |
 |---------|-----------|
-| 1セルのみプロンプト変更 | `sugo_edit_cell` |
+| 1セルのみプロンプト変更（`request_memo` なし） | `sugo_edit_cell` |
+| 1セルのプロンプト変更 + `request_memo` のクリア | `sugo_update_harness`（`cell_changes` に `prompt` + `memo: ""`） |
 | 複数セル・エッジを同時変更 | `sugo_update_harness` |
+| セルの現行プロンプト・memoの確認 | `sugo_get_cell(harness_id, cell_id)` |
