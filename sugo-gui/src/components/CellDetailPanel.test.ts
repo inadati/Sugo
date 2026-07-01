@@ -24,6 +24,36 @@ describe("CellDetailPanel", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("IME変換確定のEnterでは保存しない", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0 },
+    });
+    await wrapper.find('[data-testid="name-input"]').setValue("にほんご");
+    await wrapper.find('[data-testid="name-input"]').trigger("keydown", { key: "Enter", isComposing: true });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(wrapper.emitted("close")).toBeFalsy();
+  });
+
+  it("通常のEnter（IME変換中でない）では保存する", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ new_version: 2, lock_version: 1 })
+      .mockResolvedValueOnce({ new_version: 3, lock_version: 2 });
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0 },
+    });
+    await wrapper.find('[data-testid="name-input"]').setValue("new");
+    await wrapper.find('[data-testid="name-input"]').trigger("keydown", { key: "Enter", isComposing: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invoke).toHaveBeenCalledWith("rename_cell", {
+      harnessId: "h1", cellId: "c1", newName: "new", lockVersion: 0,
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
   it("calls rename_cell then set_cell_memo, emits renamed and close on save", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockClear();

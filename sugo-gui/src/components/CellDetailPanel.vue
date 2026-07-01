@@ -16,7 +16,7 @@
       v-model="nameDraft"
       type="text"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
-      @keydown.enter="save"
+      @keydown.enter="onNameEnter"
     />
 
     <!-- メタ情報 -->
@@ -96,6 +96,12 @@ watch(() => props.cell.id, () => {
   deleteErrorMsg.value = "";
   memoDraft.value = props.cell.memo;
 });
+
+function onNameEnter(e: KeyboardEvent) {
+  // IME変換確定のEnter（isComposing）では保存しない。日本語入力等での意図しない保存・パネルクローズを防ぐ。
+  if (e.isComposing) return;
+  void save();
+}
 
 async function save() {
   if (!nameDraft.value.trim()) {
