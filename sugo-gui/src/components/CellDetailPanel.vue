@@ -15,6 +15,10 @@
       data-testid="name-input"
       v-model="nameDraft"
       type="text"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
       @keydown.enter="onNameEnter"
     />
@@ -37,6 +41,10 @@
       v-model="memoDraft"
       rows="3"
       placeholder="このマスのプロンプトをこう直してほしい、など"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400 resize-none"
     />
 
