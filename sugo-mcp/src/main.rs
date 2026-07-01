@@ -631,6 +631,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         }
@@ -711,6 +712,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: false, // no terminal cell -> error issue
+                request_memo: "".into(),
             }],
             edges: vec![],
         };
@@ -867,6 +869,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -874,6 +877,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -916,6 +920,7 @@ mod tests {
                     prompt: "do first".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -923,6 +928,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -961,8 +967,8 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
         };
@@ -988,8 +994,8 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
         };
@@ -1020,6 +1026,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -1027,6 +1034,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
@@ -1065,6 +1073,7 @@ mod tests {
                     prompt: "do start".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -1072,6 +1081,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![

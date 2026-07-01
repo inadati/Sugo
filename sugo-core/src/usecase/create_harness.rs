@@ -39,6 +39,7 @@ pub fn default_board() -> BoardDefinition {
             prompt: String::new(),
             status: CellStatus::Active,
             terminal: true,
+            request_memo: "".into(),
         }],
         edges: vec![],
     }
@@ -142,6 +143,7 @@ mod tests {
                 prompt: "hello".into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         };
@@ -174,6 +176,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -181,6 +184,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -210,6 +214,7 @@ mod tests {
                 prompt: "hello".into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         };

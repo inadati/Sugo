@@ -31,4 +31,37 @@ pub struct Cell {
     pub status: CellStatus,
     /// Whether the cell terminates the board (a valid end state).
     pub terminal: bool,
+    /// Human-authored request for the AI to revise this cell's prompt;
+    /// empty string means no pending request. Non-empty triggers automatic
+    /// demotion to `Draft` on save (see `set_cell_memo`).
+    #[serde(default)]
+    pub request_memo: String,
+}
+
+#[cfg(test)]
+mod request_memo_tests {
+    use super::*;
+
+    #[test]
+    fn cell_without_request_memo_field_deserializes_to_empty_string() {
+        // 既存の保存済みJSON（request_memo フィールド無し）との後方互換
+        let json = r#"{"id":"c1","name":"n","prompt":"p","status":"active","terminal":false}"#;
+        let cell: Cell = serde_json::from_str(json).unwrap();
+        assert_eq!(cell.request_memo, "");
+    }
+
+    #[test]
+    fn cell_with_request_memo_field_roundtrips() {
+        let cell = Cell {
+            id: "c1".into(),
+            name: "n".into(),
+            prompt: "p".into(),
+            status: CellStatus::Active,
+            terminal: false,
+            request_memo: "直してほしい".into(),
+        };
+        let json = serde_json::to_string(&cell).unwrap();
+        let back: Cell = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.request_memo, "直してほしい");
+    }
 }

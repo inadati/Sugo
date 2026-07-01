@@ -128,6 +128,7 @@ mod tests {
                     prompt: "do step1".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -135,6 +136,7 @@ mod tests {
                     prompt: "do step2".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c3".into(),
@@ -142,6 +144,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![
@@ -279,6 +282,7 @@ mod tests {
                     prompt: "pa".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -286,6 +290,7 @@ mod tests {
                     prompt: "pb".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c3".into(),
@@ -293,6 +298,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![
@@ -351,6 +357,7 @@ mod tests {
                     prompt: "choose".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -358,6 +365,7 @@ mod tests {
                     prompt: "left branch".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c3".into(),
@@ -365,6 +373,7 @@ mod tests {
                     prompt: "right branch".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![

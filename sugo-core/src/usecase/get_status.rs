@@ -161,6 +161,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -168,6 +169,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -211,6 +213,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -218,6 +221,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -282,6 +286,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -289,6 +294,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -335,6 +341,7 @@ mod tests {
             prompt: "".into(),
             status: CellStatus::Draft,
             terminal: false,
+            request_memo: "".into(),
         });
         let expected_lock = h.lock_version;
         let new_version = BoardVersion {

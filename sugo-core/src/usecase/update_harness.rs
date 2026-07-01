@@ -120,6 +120,7 @@ mod tests {
                     prompt: "do active".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -127,6 +128,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![

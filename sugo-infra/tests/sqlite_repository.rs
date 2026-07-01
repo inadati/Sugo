@@ -30,6 +30,7 @@ mod helpers {
                 prompt: prompt.into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         }
@@ -47,6 +48,7 @@ mod helpers {
                     prompt: "hello".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -54,6 +56,7 @@ mod helpers {
                     prompt: "wip".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c3".into(),
@@ -61,6 +64,7 @@ mod helpers {
                     prompt: "".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![

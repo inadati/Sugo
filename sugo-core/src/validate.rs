@@ -176,7 +176,7 @@ mod tests {
     use crate::domain::edge::Edge;
 
     fn cell(id: &str, terminal: bool, status: CellStatus) -> Cell {
-        Cell { id: id.into(), name: id.into(), prompt: "p".into(), status, terminal }
+        Cell { id: id.into(), name: id.into(), prompt: "p".into(), status, terminal, request_memo: "".into() }
     }
     fn edge(from: &str, to: &str) -> Edge {
         Edge { from: from.into(), to: to.into(), label: "l".into(), guard: None }
