@@ -259,10 +259,7 @@ impl SugoServer {
             .iter()
             .find(|c| c.id == args.cell_id)
             .ok_or_else(|| {
-                ErrorData::invalid_params(
-                    format!("cell not found: {}", args.cell_id),
-                    Some(serde_json::json!({ "code": "not_found" })),
-                )
+                error::to_tool_error(sugo_core::error::CoreError::NotFound(args.cell_id.clone()))
             })?;
 
         let payload = serde_json::json!({
@@ -844,6 +841,11 @@ mod tests {
             .await
             .expect_err("unknown cell_id fails");
         assert_eq!(error_code(&err), "not_found");
+        // NotFound must route through the shared error::to_tool_error mapping
+        // (INTERNAL_ERROR), matching every other tool's NotFound handling —
+        // not a hand-rolled INVALID_PARAMS, which is reserved for genuine
+        // input-shape errors elsewhere in this file.
+        assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     }
 
     #[tokio::test]
