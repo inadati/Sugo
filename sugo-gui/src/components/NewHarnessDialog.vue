@@ -8,8 +8,12 @@
         v-model="name"
         type="text"
         placeholder="例: しりとりデモ"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
         class="w-full border border-gray-300 rounded px-3 py-2 mb-3 focus:outline-none focus:border-blue-400"
-        @keydown.enter="submit"
+        @keydown.enter="onNameEnter"
       />
       <label class="block text-xs text-gray-500 mb-1">説明（任意）</label>
       <textarea
@@ -17,6 +21,10 @@
         v-model="description"
         rows="3"
         placeholder="このハーネスの目的など"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
         class="w-full border border-gray-300 rounded px-3 py-2 mb-4 focus:outline-none focus:border-blue-400 resize-none"
       />
       <p v-if="errorMsg" class="text-red-500 text-sm mb-3">{{ errorMsg }}</p>
@@ -47,6 +55,12 @@ const name = ref("");
 const description = ref("");
 const errorMsg = ref("");
 const submitting = ref(false);
+
+function onNameEnter(e: KeyboardEvent) {
+  // IME変換確定のEnter（isComposing）では送信しない。
+  if (e.isComposing) return;
+  void submit();
+}
 
 async function submit() {
   if (submitting.value) return;
