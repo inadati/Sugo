@@ -15,6 +15,7 @@ pub struct CellDto {
     pub prompt: String,
     pub status: String,
     pub terminal: bool,
+    pub memo: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,6 +30,7 @@ pub struct EdgeDto {
 pub struct DraftCellDto {
     pub cell_id: String,
     pub name: String,
+    pub memo: String,
 }
 
 #[derive(Debug, Serialize)]

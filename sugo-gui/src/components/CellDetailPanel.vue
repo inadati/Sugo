@@ -11,25 +11,16 @@
 
     <!-- タイトル編集 -->
     <label class="block text-xs text-gray-500 mb-1">タイトル</label>
-    <div class="flex gap-2 mb-1">
-      <input
-        data-testid="name-input"
-        v-model="nameDraft"
-        type="text"
-        class="flex-1 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
-        @keydown.enter="save"
-      />
-      <button
-        data-testid="name-save"
-        class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
-        :disabled="saving"
-        @click="save"
-      >保存</button>
-    </div>
-    <p v-if="errorMsg" class="text-red-500 text-sm mb-3">{{ errorMsg }}</p>
+    <input
+      data-testid="name-input"
+      v-model="nameDraft"
+      type="text"
+      class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
+      @keydown.enter="save"
+    />
 
     <!-- メタ情報 -->
-    <dl class="text-sm text-gray-600 mt-4 mb-4 space-y-1">
+    <dl class="text-sm text-gray-600 mb-4 space-y-1">
       <div><dt class="inline text-gray-400">id: </dt><dd class="inline">{{ cell.id }}</dd></div>
       <div><dt class="inline text-gray-400">status: </dt><dd class="inline">{{ cell.status }}</dd></div>
       <div><dt class="inline text-gray-400">terminal: </dt><dd class="inline">{{ cell.terminal }}</dd></div>
@@ -38,6 +29,25 @@
     <!-- プロンプト閲覧 -->
     <label class="block text-xs text-gray-500 mb-1">プロンプト</label>
     <pre class="text-sm bg-gray-50 border border-gray-200 rounded p-3 whitespace-pre-wrap break-words">{{ cell.prompt || "（未登録）" }}</pre>
+
+    <!-- 要望メモ -->
+    <label class="block text-xs text-gray-500 mb-1 mt-4">AIへの要望メモ</label>
+    <textarea
+      data-testid="memo-input"
+      v-model="memoDraft"
+      rows="3"
+      placeholder="このマスのプロンプトをこう直してほしい、など"
+      class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400 resize-none"
+    />
+
+    <!-- 保存 -->
+    <button
+      data-testid="save"
+      class="w-full px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+      :disabled="saving"
+      @click="save"
+    >保存</button>
+    <p v-if="errorMsg" data-testid="save-error" class="text-red-500 text-sm mt-1">{{ errorMsg }}</p>
 
     <!-- マス削除（START 以外は draft/active を問わず削除可） -->
     <div v-if="!isStart" class="mt-6 border-t border-gray-100 pt-4">
@@ -63,6 +73,7 @@ interface CellData {
   prompt: string;
   status: string;
   terminal: boolean;
+  memo: string;
 }
 
 const props = defineProps<{ harnessId: string; cell: CellData; lockVersion: number; isStart?: boolean }>();
@@ -77,21 +88,37 @@ const errorMsg = ref("");
 const saving = ref(false);
 const deleting = ref(false);
 const deleteErrorMsg = ref("");
+const memoDraft = ref(props.cell.memo);
 
-watch(() => props.cell.id, () => { nameDraft.value = props.cell.name; errorMsg.value = ""; deleteErrorMsg.value = ""; });
+watch(() => props.cell.id, () => {
+  nameDraft.value = props.cell.name;
+  errorMsg.value = "";
+  deleteErrorMsg.value = "";
+  memoDraft.value = props.cell.memo;
+});
 
 async function save() {
-  if (!nameDraft.value.trim()) return;
+  if (!nameDraft.value.trim()) {
+    errorMsg.value = "タイトルを入力してください。";
+    return;
+  }
   saving.value = true;
   errorMsg.value = "";
   try {
-    const result = await invoke<{ new_version: number; lock_version: number }>("rename_cell", {
+    const renamed = await invoke<{ new_version: number; lock_version: number }>("rename_cell", {
       harnessId: props.harnessId,
       cellId: props.cell.id,
       newName: nameDraft.value.trim(),
       lockVersion: props.lockVersion,
     });
-    emit("renamed", result.new_version, result.lock_version);
+    const memoSaved = await invoke<{ new_version: number; lock_version: number }>("set_cell_memo", {
+      harnessId: props.harnessId,
+      cellId: props.cell.id,
+      memo: memoDraft.value,
+      lockVersion: renamed.lock_version,
+    });
+    emit("renamed", memoSaved.new_version, memoSaved.lock_version);
+    emit("close");
   } catch (e) {
     const msg = String(e);
     if (msg.includes("lock_conflict")) {
@@ -129,4 +156,5 @@ async function deleteCell() {
     deleting.value = false;
   }
 }
+
 </script>

@@ -70,6 +70,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: false, // no terminal -> no_terminal (error)
+                request_memo: "".into(),
             }],
             edges: vec![],
         };

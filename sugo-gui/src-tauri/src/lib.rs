@@ -4,8 +4,8 @@ mod state;
 
 use commands::{
     add_cell, add_edge, create_harness, delete_cell, delete_edge, get_active_runs, get_harness,
-    list_harnesses, list_trash, purge_harness, rename_cell, restore_harness, trash_harness,
-    update_edge,
+    list_harnesses, list_trash, purge_harness, rename_cell, restore_harness, set_cell_memo,
+    trash_harness, update_edge,
 };
 use state::AppState;
 use sugo_core::ports::repository::HarnessRepository;
@@ -36,6 +36,7 @@ pub fn run() {
             get_harness,
             add_cell,
             rename_cell,
+            set_cell_memo,
             delete_cell,
             add_edge,
             delete_edge,

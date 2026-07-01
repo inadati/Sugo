@@ -483,6 +483,7 @@ mod tests {
                 prompt: prompt.into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         }

@@ -12,6 +12,7 @@ pub struct CellChange {
     pub cell_id: String,
     pub prompt: Option<String>,
     pub status: Option<CellStatus>,
+    pub memo: Option<String>,
 }
 
 pub struct EdgeKey {
@@ -65,6 +66,9 @@ pub async fn update_harness(
         }
         if let Some(s) = change.status {
             cell.status = s;
+        }
+        if let Some(ref m) = change.memo {
+            cell.request_memo = m.trim().to_string();
         }
     }
 
@@ -120,6 +124,7 @@ mod tests {
                     prompt: "do active".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -127,6 +132,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![
@@ -161,6 +167,7 @@ mod tests {
                     cell_id: "c2".into(),
                     prompt: Some("done".into()),
                     status: Some(CellStatus::Active),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -190,6 +197,7 @@ mod tests {
                     cell_id: "c1".into(),
                     prompt: Some("updated prompt".into()),
                     status: None,
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -287,6 +295,7 @@ mod tests {
                     cell_id: "c2".into(),
                     prompt: Some("filled".into()),
                     status: Some(CellStatus::Active),
+                    memo: None,
                 }],
                 edge_add: vec![Edge {
                     from: "c2".into(),
@@ -317,6 +326,7 @@ mod tests {
                     cell_id: "ghost".into(),
                     prompt: None,
                     status: Some(CellStatus::Active),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -344,5 +354,87 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, CoreError::LockConflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn update_clears_memo_and_activates_together() {
+        let (repo, clock, id) = seed().await;
+        // Draft へ降格済みの c2 に memo が入っている想定を作るため、まず memo を設定する。
+        let (mut h, head) = repo.get(&id).await.unwrap().unwrap();
+        let mut def = head.definition.clone();
+        def.cells.iter_mut().find(|c| c.id == "c2").unwrap().request_memo = "直して".into();
+        let v2 = BoardVersion {
+            id: "v2".into(),
+            harness_id: id.clone(),
+            version_no: h.current_version + 1,
+            content_hash: crate::usecase::create_harness::content_hash(&def),
+            definition: def,
+            created_at: "now".into(),
+        };
+        h.current_version += 1;
+        h.lock_version += 1;
+        repo.append_version(&h, &v2, h.lock_version - 1).await.unwrap();
+
+        let out = update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: h.lock_version,
+                cell_changes: vec![CellChange {
+                    cell_id: "c2".into(),
+                    prompt: Some("revised prompt".into()),
+                    status: Some(CellStatus::Active),
+                    memo: Some("".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.new_version, h.current_version + 1);
+        let (hh, vv) = repo.get(&id).await.unwrap().unwrap();
+        assert!(!hh.has_draft);
+        let cell = vv.definition.cells.iter().find(|c| c.id == "c2").unwrap();
+        assert_eq!(cell.prompt, "revised prompt");
+        assert_eq!(cell.request_memo, "");
+    }
+
+    #[tokio::test]
+    async fn update_trims_whitespace_only_memo_to_empty() {
+        // The AI-facing memo-write path must normalize whitespace-only memo
+        // the same way the GUI's set_cell_memo_inner does, so the same field
+        // doesn't silently diverge in stored content depending on which
+        // entry point wrote it.
+        let (repo, clock, id) = seed().await;
+        let out = update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![CellChange {
+                    cell_id: "c1".into(),
+                    prompt: None,
+                    status: None,
+                    memo: Some("   ".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.new_version, 2);
+        let (_, v) = repo.get(&id).await.unwrap().unwrap();
+        let cell = v.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        assert_eq!(cell.request_memo, "");
+        // update_harness never auto-couples status to memo (unlike the GUI's
+        // set_cell_memo): status is driven solely by the change's own
+        // `status` field, which was omitted here, so it stays Active.
+        assert_eq!(cell.status, CellStatus::Active);
     }
 }

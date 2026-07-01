@@ -102,7 +102,7 @@ import EdgeEditor from "../components/EdgeEditor.vue";
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
-interface Cell { id: string; name: string; prompt: string; status: string; terminal: boolean }
+interface Cell { id: string; name: string; prompt: string; status: string; terminal: boolean; memo: string }
 
 interface HarnessDetail {
   harness_id: string;
@@ -113,7 +113,7 @@ interface HarnessDetail {
   start_cell_id: string;
   cells: Cell[];
   edges: { from: string; to: string; label: string; guard: string | null }[];
-  draft_diff: { cell_id: string; name: string }[];
+  draft_diff: { cell_id: string; name: string; memo: string }[];
 }
 
 interface ActiveRun {

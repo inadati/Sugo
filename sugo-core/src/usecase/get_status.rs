@@ -19,6 +19,8 @@ pub struct DraftDiffEntry {
     pub cell_id: String,
     /// Human-readable name of the draft cell.
     pub name: String,
+    /// The cell's `request_memo` at the time of this diff.
+    pub memo: String,
 }
 
 /// Snapshot of a harness's current state plus its draft difference.
@@ -92,7 +94,11 @@ pub async fn get_status(
         .iter()
         .filter(|c| c.status == CellStatus::Draft)
         .filter(|c| !baseline_cells.contains(&c.id))
-        .map(|c| DraftDiffEntry { cell_id: c.id.clone(), name: c.name.clone() })
+        .map(|c| DraftDiffEntry {
+            cell_id: c.id.clone(),
+            name: c.name.clone(),
+            memo: c.request_memo.clone(),
+        })
         .collect();
     Ok(HarnessStatus {
         harness_id: h.id,
@@ -161,6 +167,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -168,6 +175,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -211,6 +219,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -218,6 +227,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -282,6 +292,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -289,6 +300,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -335,6 +347,7 @@ mod tests {
             prompt: "".into(),
             status: CellStatus::Draft,
             terminal: false,
+            request_memo: "".into(),
         });
         let expected_lock = h.lock_version;
         let new_version = BoardVersion {
@@ -358,6 +371,46 @@ mod tests {
         assert!(st3.has_draft);
         assert_eq!(st3.draft_diff.len(), 1);
         assert_eq!(st3.draft_diff[0].cell_id, "c3");
+    }
+
+    #[tokio::test]
+    async fn draft_diff_carries_request_memo() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "c1".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "c2".into(),
+                    prompt: "old prompt".into(),
+                    status: CellStatus::Draft,
+                    terminal: true,
+                    request_memo: "もっと丁寧に書き直してほしい".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+        )
+        .await
+        .unwrap();
+
+        let st = get_status(&repo, &out.harness_id).await.unwrap();
+        let entry = st.draft_diff.iter().find(|d| d.cell_id == "c2").unwrap();
+        assert_eq!(entry.memo, "もっと丁寧に書き直してほしい");
     }
 
     #[tokio::test]

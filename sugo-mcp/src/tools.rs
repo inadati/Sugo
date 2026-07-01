@@ -67,6 +67,15 @@ pub struct EditArgs {
     pub expected_lock_version: i64,
 }
 
+/// Arguments for `sugo_get_cell`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetCellArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// Id of the cell to read in full (including its current prompt).
+    pub cell_id: String,
+}
+
 /// Arguments for `sugo_validate_harness`.
 ///
 /// Either a stored harness is validated via `harness_id`, or a board
@@ -110,6 +119,9 @@ pub struct CellChangeArgs {
     /// New status: "active" or "draft"; omit to keep the current status.
     #[serde(default)]
     pub status: Option<String>,
+    /// New request_memo text; omit to keep the current memo. Pass "" to clear.
+    #[serde(default)]
+    pub memo: Option<String>,
 }
 
 /// Identifies an edge to remove by its (from, to, label) triple.

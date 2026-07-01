@@ -6,7 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue({ new_version: 2, lock_version: 1 }),
 }));
 
-const cell = { id: "c1", name: "old", prompt: "do the thing", status: "active", terminal: false };
+const cell = { id: "c1", name: "old", prompt: "do the thing", status: "active", terminal: false, memo: "" };
 
 describe("CellDetailPanel", () => {
   it("shows the cell prompt", () => {
@@ -24,18 +24,26 @@ describe("CellDetailPanel", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
-  it("calls rename_cell and emits renamed on save", async () => {
+  it("calls rename_cell then set_cell_memo, emits renamed and close on save", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ new_version: 2, lock_version: 1 })
+      .mockResolvedValueOnce({ new_version: 3, lock_version: 2 });
     const wrapper = mount(CellDetailPanel, {
       props: { harnessId: "h1", cell, lockVersion: 0 },
     });
     await wrapper.find('[data-testid="name-input"]').setValue("new");
-    await wrapper.find('[data-testid="name-save"]').trigger("click");
+    await wrapper.find('[data-testid="save"]').trigger("click");
     await new Promise(r => setTimeout(r, 0));
-    expect(invoke).toHaveBeenCalledWith("rename_cell", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "rename_cell", {
       harnessId: "h1", cellId: "c1", newName: "new", lockVersion: 0,
     });
-    expect(wrapper.emitted("renamed")).toBeTruthy();
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_cell_memo", {
+      harnessId: "h1", cellId: "c1", memo: "", lockVersion: 1,
+    });
+    expect(wrapper.emitted("renamed")).toEqual([[3, 2]]);
+    expect(wrapper.emitted("close")).toBeTruthy();
   });
 
   it("does not call rename_cell with empty name", async () => {
@@ -45,7 +53,7 @@ describe("CellDetailPanel", () => {
       props: { harnessId: "h1", cell, lockVersion: 0 },
     });
     await wrapper.find('[data-testid="name-input"]').setValue("   ");
-    await wrapper.find('[data-testid="name-save"]').trigger("click");
+    await wrapper.find('[data-testid="save"]').trigger("click");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -57,7 +65,7 @@ describe("CellDetailPanel", () => {
       props: { harnessId: "h1", cell, lockVersion: 0 },
     });
     await wrapper.find('[data-testid="name-input"]').setValue("new");
-    await wrapper.find('[data-testid="name-save"]').trigger("click");
+    await wrapper.find('[data-testid="save"]').trigger("click");
     await new Promise(r => setTimeout(r, 0));
     expect(wrapper.text()).toContain("他で編集が入りました。再読み込みしてください。");
   });
@@ -79,7 +87,7 @@ describe("CellDetailPanel", () => {
       props: { harnessId: "h1", cell: { ...cell }, lockVersion: 0 },
     });
     await wrapper.find('[data-testid="name-input"]').setValue("editing...");
-    const other = { id: "c2", name: "second", prompt: "p2", status: "active", terminal: false };
+    const other = { id: "c2", name: "second", prompt: "p2", status: "active", terminal: false, memo: "" };
     await wrapper.setProps({ cell: other });
     expect((wrapper.find('[data-testid="name-input"]').element as HTMLInputElement).value).toBe("second");
   });
@@ -111,5 +119,50 @@ describe("CellDetailPanel", () => {
       harnessId: "h1", cellId: "c1", lockVersion: 0,
     });
     expect(wrapper.emitted("deleted")).toBeTruthy();
+  });
+
+  it("要望メモを入力して保存すると set_cell_memo にその内容が渡る", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ new_version: 2, lock_version: 1 })
+      .mockResolvedValueOnce({ new_version: 3, lock_version: 2 });
+    const wrapper = mount(CellDetailPanel, {
+      props: {
+        harnessId: "h1",
+        cell: { id: "c1", name: "n", prompt: "p", status: "active", terminal: false, memo: "" },
+        lockVersion: 1,
+      },
+    });
+    await wrapper.find('[data-testid="memo-input"]').setValue("直してほしい");
+    await wrapper.find('[data-testid="save"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_cell_memo", {
+      harnessId: "h1",
+      cellId: "c1",
+      memo: "直してほしい",
+      lockVersion: 1,
+    });
+    expect(wrapper.emitted("renamed")).toEqual([[3, 2]]);
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("保存で lock_conflict が返るとエラーメッセージを表示しパネルは閉じない", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockRejectedValueOnce("lock_conflict");
+    const wrapper = mount(CellDetailPanel, {
+      props: {
+        harnessId: "h1",
+        cell: { id: "c1", name: "n", prompt: "p", status: "active", terminal: false, memo: "" },
+        lockVersion: 1,
+      },
+    });
+    await wrapper.find('[data-testid="memo-input"]').setValue("x");
+    await wrapper.find('[data-testid="save"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.find('[data-testid="save-error"]').text()).toContain("他で編集が入りました");
+    expect(wrapper.emitted("close")).toBeFalsy();
   });
 });

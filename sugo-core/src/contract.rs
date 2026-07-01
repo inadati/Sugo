@@ -33,6 +33,7 @@ fn sample_board(prompt: &str) -> BoardDefinition {
                 prompt: prompt.into(),
                 status: CellStatus::Active,
                 terminal: false,
+                request_memo: "".into(),
             },
             Cell {
                 id: "c2".into(),
@@ -40,6 +41,7 @@ fn sample_board(prompt: &str) -> BoardDefinition {
                 prompt: "".into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             },
         ],
         edges: vec![Edge {

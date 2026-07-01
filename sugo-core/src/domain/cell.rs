@@ -31,4 +31,43 @@ pub struct Cell {
     pub status: CellStatus,
     /// Whether the cell terminates the board (a valid end state).
     pub terminal: bool,
+    /// Human-authored request for the AI to revise this cell's prompt;
+    /// empty string means no pending request. Always stored trimmed.
+    ///
+    /// Two write paths exist with different status-coupling: the GUI's
+    /// `set_cell_memo` demotes `Active` to `Draft` automatically when a
+    /// non-empty memo is saved. The AI-facing `update_harness` (via
+    /// `sugo_update_harness`) applies no such coupling — it writes `memo`
+    /// and `status` independently, since the AI caller sets both
+    /// explicitly in one call when resolving a draft.
+    #[serde(default)]
+    pub request_memo: String,
+}
+
+#[cfg(test)]
+mod request_memo_tests {
+    use super::*;
+
+    #[test]
+    fn cell_without_request_memo_field_deserializes_to_empty_string() {
+        // 既存の保存済みJSON（request_memo フィールド無し）との後方互換
+        let json = r#"{"id":"c1","name":"n","prompt":"p","status":"active","terminal":false}"#;
+        let cell: Cell = serde_json::from_str(json).unwrap();
+        assert_eq!(cell.request_memo, "");
+    }
+
+    #[test]
+    fn cell_with_request_memo_field_roundtrips() {
+        let cell = Cell {
+            id: "c1".into(),
+            name: "n".into(),
+            prompt: "p".into(),
+            status: CellStatus::Active,
+            terminal: false,
+            request_memo: "直してほしい".into(),
+        };
+        let json = serde_json::to_string(&cell).unwrap();
+        let back: Cell = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.request_memo, "直してほしい");
+    }
 }

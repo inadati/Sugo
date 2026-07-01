@@ -86,8 +86,10 @@ impl SugoServer {
     /// Report a harness's current status, or a summary of all harnesses.
     #[tool(description = "Get status. With harness_id: returns { harness_id, name, \
         current_version, has_draft, cells:[{id,name,status,terminal}], edges:[...], \
-        draft_diff:[{cell_id,name}], \
+        draft_diff:[{cell_id,name,memo}], \
         running_runs:[{run_id, current_cell_id, is_stalled, secs_since_last_modified}] }. \
+        draft_diff's memo is the human's request_memo for that draft cell (empty string \
+        for newly added cells with no request). \
         running_runs contains all Running-state runs with on-demand stall detection via \
         jsonl mtime (timeout 300 s). Without harness_id: returns { harnesses:[...] }.")]
     async fn sugo_status(
@@ -131,7 +133,7 @@ impl SugoServer {
                 let draft_diff: Vec<serde_json::Value> = st
                     .draft_diff
                     .iter()
-                    .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name }))
+                    .map(|d| serde_json::json!({ "cell_id": d.cell_id, "name": d.name, "memo": d.memo }))
                     .collect();
 
                 // On-demand stall detection: list Running runs and check each
@@ -225,6 +227,48 @@ impl SugoServer {
             "harness_id": out.harness_id,
             "new_version": out.new_version,
             "lock_version": out.lock_version,
+        });
+        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+    }
+
+    /// Read a single cell's full detail, including its current prompt.
+    ///
+    /// `sugo_status` deliberately omits `prompt` to keep the overview compact
+    /// (design decision, see the comment above its cells projection); this is
+    /// the read counterpart to `sugo_edit_cell` for callers that need the
+    /// exact current prompt text, e.g. to revise it in light of a cell's
+    /// `request_memo` before calling `sugo_edit_cell` or `sugo_update_harness`.
+    #[tool(description = "Get a single cell's full detail: { cell_id, name, prompt, status, \
+        terminal, memo }. Unlike sugo_status (which never includes prompt), this returns the \
+        cell's exact current prompt text — use this before revising a cell's prompt (e.g. in \
+        light of its request_memo) so the revision is grounded in the actual current content, \
+        not a summary.")]
+    async fn sugo_get_cell(
+        &self,
+        Parameters(args): Parameters<tools::GetCellArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::get_status::get_status;
+
+        let st = get_status(self.repo.as_ref(), &args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let cell = st
+            .definition
+            .cells
+            .iter()
+            .find(|c| c.id == args.cell_id)
+            .ok_or_else(|| {
+                error::to_tool_error(sugo_core::error::CoreError::NotFound(args.cell_id.clone()))
+            })?;
+
+        let payload = serde_json::json!({
+            "cell_id": cell.id,
+            "name": cell.name,
+            "prompt": cell.prompt,
+            "status": cell.status,
+            "terminal": cell.terminal,
+            "memo": cell.request_memo,
         });
         Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
     }
@@ -400,8 +444,12 @@ impl SugoServer {
 
     /// Batch-update cells and edges in one new board version.
     #[tool(description = "Batch-update a harness in a single new board version. \
-        cell_changes: [{cell_id, prompt?, status?}] — prompt and status are optional \
-        (omit to keep current; status must be 'active' or 'draft'). \
+        cell_changes: [{cell_id, prompt?, status?, memo?}] — prompt, status, and memo are optional \
+        (omit to keep current; status must be 'active' or 'draft'; memo is the human's request_memo, \
+        pass \"\" to clear it, stored trimmed). \
+        Setting memo here does NOT auto-change status — unlike the GUI's memo-save flow, this tool \
+        applies status and memo independently, so pass status explicitly (e.g. status:'active' \
+        alongside memo:'' when resolving a draft). \
         edge_add: [{from, to, label, guard?}] — edges to add. \
         edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
         All three arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
@@ -428,7 +476,7 @@ impl SugoServer {
                         Some(serde_json::json!({ "code": "invalid_arguments" })),
                     )),
                 }?;
-                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status })
+                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status, memo: c.memo })
             })
             .collect::<Result<_, ErrorData>>()?;
 
@@ -631,6 +679,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: true,
+                request_memo: "".into(),
             }],
             edges: vec![],
         }
@@ -711,6 +760,7 @@ mod tests {
                 prompt: "p".into(),
                 status: CellStatus::Active,
                 terminal: false, // no terminal cell -> error issue
+                request_memo: "".into(),
             }],
             edges: vec![],
         };
@@ -751,6 +801,54 @@ mod tests {
 
         assert!(p["edges"].is_array(), "edges is a top-level array");
         assert!(p["draft_diff"].is_array(), "draft_diff is a top-level array");
+    }
+
+    #[tokio::test]
+    async fn get_cell_returns_full_detail_including_prompt() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .await
+            .expect("get_cell succeeds");
+        let p = payload(&result);
+
+        assert_eq!(p["cell_id"], "c1");
+        assert_eq!(p["name"], "start");
+        assert_eq!(p["prompt"], "p");
+        assert_eq!(p["status"], "active");
+        assert_eq!(p["terminal"], true);
+        assert_eq!(p["memo"], "");
+    }
+
+    #[tokio::test]
+    async fn get_cell_surfaces_non_empty_memo() {
+        let srv = server();
+        let mut def = valid_board();
+        def.cells[0].request_memo = "もっと丁寧に".into();
+        let id = create_harness(&srv, "h", Some(def)).await;
+        let result = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .await
+            .expect("get_cell succeeds");
+        let p = payload(&result);
+        assert_eq!(p["memo"], "もっと丁寧に");
+    }
+
+    #[tokio::test]
+    async fn get_cell_unknown_cell_id_is_not_found() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let err = srv
+            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "ghost".into() }))
+            .await
+            .expect_err("unknown cell_id fails");
+        assert_eq!(error_code(&err), "not_found");
+        // NotFound must route through the shared error::to_tool_error mapping
+        // (INTERNAL_ERROR), matching every other tool's NotFound handling —
+        // not a hand-rolled INVALID_PARAMS, which is reserved for genuine
+        // input-shape errors elsewhere in this file.
+        assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     }
 
     #[tokio::test]
@@ -867,6 +965,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -874,6 +973,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: false,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![],
@@ -916,6 +1016,7 @@ mod tests {
                     prompt: "do first".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -923,6 +1024,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge {
@@ -961,8 +1063,8 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
         };
@@ -988,8 +1090,8 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true },
+                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
+                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
         };
@@ -1020,6 +1122,7 @@ mod tests {
                     prompt: "p".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -1027,6 +1130,7 @@ mod tests {
                     prompt: "done".into(),
                     status: CellStatus::Active,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
@@ -1065,6 +1169,7 @@ mod tests {
                     prompt: "do start".into(),
                     status: CellStatus::Active,
                     terminal: false,
+                    request_memo: "".into(),
                 },
                 Cell {
                     id: "c2".into(),
@@ -1072,6 +1177,7 @@ mod tests {
                     prompt: "".into(),
                     status: CellStatus::Draft,
                     terminal: true,
+                    request_memo: "".into(),
                 },
             ],
             edges: vec![
@@ -1093,6 +1199,7 @@ mod tests {
                     cell_id: "c2".into(),
                     prompt: Some("done".into()),
                     status: Some("active".into()),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -1125,6 +1232,7 @@ mod tests {
                 cell_id: "c2".into(),
                 prompt: Some("done".into()),
                 status: Some("active".into()),
+                memo: None,
             }],
             edge_add: vec![],
             edge_remove: vec![],
@@ -1159,6 +1267,7 @@ mod tests {
                     cell_id: "start".into(),
                     prompt: None,
                     status: Some("unknown_status".into()),
+                    memo: None,
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
@@ -1176,5 +1285,68 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(code, "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn status_detail_draft_diff_includes_memo() {
+        // draft_diff entries must expose the cell's request_memo alongside cell_id/name.
+        let srv = server();
+        let board_with_memo = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "start".into(),
+                    prompt: "do start".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "finish".into(),
+                    prompt: "".into(),
+                    status: CellStatus::Draft,
+                    terminal: true,
+                    request_memo: "もっと丁寧に書き直してほしい".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        let id = create_harness(&srv, "h", Some(board_with_memo)).await;
+        let result = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .await
+            .expect("status succeeds");
+        let p = payload(&result);
+        let draft_diff = p["draft_diff"].as_array().expect("draft_diff array");
+        let entry = draft_diff
+            .iter()
+            .find(|d| d["cell_id"] == serde_json::json!("c2"))
+            .expect("c2 present in draft_diff");
+        assert_eq!(entry["memo"], serde_json::json!("もっと丁寧に書き直してほしい"));
+    }
+
+    #[tokio::test]
+    async fn update_harness_accepts_memo_arg() {
+        // The memo field on CellChangeArgs must be accepted and forwarded without error.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: id,
+                expected_lock_version: 0,
+                cell_changes: vec![tools::CellChangeArgs {
+                    cell_id: "c1".into(),
+                    prompt: None,
+                    status: None,
+                    memo: Some("test memo".into()),
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await;
+        assert!(result.is_ok());
     }
 }
