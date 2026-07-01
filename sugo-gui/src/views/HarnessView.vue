@@ -55,6 +55,7 @@
         @close="selectedCellId = null"
         @renamed="onCellRenamed"
         @deleted="onCellDeleted"
+        @memoSaved="onCellMemoSaved"
       />
     </template>
 
@@ -102,7 +103,7 @@ import EdgeEditor from "../components/EdgeEditor.vue";
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
-interface Cell { id: string; name: string; prompt: string; status: string; terminal: boolean }
+interface Cell { id: string; name: string; prompt: string; status: string; terminal: boolean; memo: string }
 
 interface HarnessDetail {
   harness_id: string;
@@ -113,7 +114,7 @@ interface HarnessDetail {
   start_cell_id: string;
   cells: Cell[];
   edges: { from: string; to: string; label: string; guard: string | null }[];
-  draft_diff: { cell_id: string; name: string }[];
+  draft_diff: { cell_id: string; name: string; memo: string }[];
 }
 
 interface ActiveRun {
@@ -272,6 +273,11 @@ async function onCellRenamed(_newVersion: number, newLockVersion: number) {
 
 async function onCellDeleted(_newVersion: number, newLockVersion: number) {
   selectedCellId.value = null;
+  lockVersion.value = newLockVersion;
+  await load();
+}
+
+async function onCellMemoSaved(_newVersion: number, newLockVersion: number) {
   lockVersion.value = newLockVersion;
   await load();
 }
