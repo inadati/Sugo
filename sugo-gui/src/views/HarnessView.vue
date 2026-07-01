@@ -55,7 +55,6 @@
         @close="selectedCellId = null"
         @renamed="onCellRenamed"
         @deleted="onCellDeleted"
-        @memoSaved="onCellMemoSaved"
       />
     </template>
 
@@ -273,11 +272,6 @@ async function onCellRenamed(_newVersion: number, newLockVersion: number) {
 
 async function onCellDeleted(_newVersion: number, newLockVersion: number) {
   selectedCellId.value = null;
-  lockVersion.value = newLockVersion;
-  await load();
-}
-
-async function onCellMemoSaved(_newVersion: number, newLockVersion: number) {
   lockVersion.value = newLockVersion;
   await load();
 }
