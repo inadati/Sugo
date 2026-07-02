@@ -7,6 +7,17 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("AddCellDialog", () => {
+  it("Enterキーは何も起きない（invokeが呼ばれない）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const wrapper = mount(AddCellDialog, {
+      props: { harnessId: "h1", lockVersion: 0 },
+    });
+    await wrapper.find("input").setValue("new-cell");
+    await wrapper.find("input").trigger("keydown", { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("emits close when cancel clicked", async () => {
     const wrapper = mount(AddCellDialog, {
       props: { harnessId: "h1", lockVersion: 0 },
