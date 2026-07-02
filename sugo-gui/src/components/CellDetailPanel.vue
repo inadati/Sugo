@@ -20,7 +20,7 @@
       autocapitalize="off"
       spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
-      @keydown.enter="onNameEnter"
+      @blur="save"
     />
 
     <!-- メタ情報 -->
@@ -46,15 +46,8 @@
       autocapitalize="off"
       spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400 resize-none"
+      @blur="save"
     />
-
-    <!-- 保存 -->
-    <button
-      data-testid="save"
-      class="w-full px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
-      :disabled="saving"
-      @click="save"
-    >保存</button>
     <p v-if="errorMsg" data-testid="save-error" class="text-red-500 text-sm mt-1">{{ errorMsg }}</p>
 
     <!-- マス削除（START 以外は draft/active を問わず削除可） -->
@@ -105,13 +98,11 @@ watch(() => props.cell.id, () => {
   memoDraft.value = props.cell.memo;
 });
 
-function onNameEnter(e: KeyboardEvent) {
-  // IME変換確定のEnter（isComposing）では保存しない。日本語入力等での意図しない保存・パネルクローズを防ぐ。
-  if (e.isComposing) return;
-  void save();
-}
-
 async function save() {
+  // タイトル欄・メモ欄いずれかからフォーカスが外れたタイミングで自動保存する。
+  // 二重発火（例: name-input → memo-input のタブ移動でblurが連続する）を防ぐ。
+  if (saving.value) return;
+  if (nameDraft.value === props.cell.name && memoDraft.value === props.cell.memo) return;
   if (!nameDraft.value.trim()) {
     errorMsg.value = "タイトルを入力してください。";
     return;
@@ -132,7 +123,6 @@ async function save() {
       lockVersion: renamed.lock_version,
     });
     emit("renamed", memoSaved.new_version, memoSaved.lock_version);
-    emit("close");
   } catch (e) {
     const msg = String(e);
     if (msg.includes("lock_conflict")) {
