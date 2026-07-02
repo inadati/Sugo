@@ -9,7 +9,6 @@
     spellcheck="false"
     class="absolute z-20 border-2 border-blue-400 rounded px-1 py-0.5 text-sm text-center shadow"
     :style="{ left: x + 'px', top: y + 'px', width: width + 'px', transform: 'translate(-50%, -50%)' }"
-    @keydown.enter="onEnter"
     @keydown.esc="cancel"
     @blur="commit"
   />
@@ -31,12 +30,6 @@ onMounted(() => {
   inputEl.value?.focus();
   inputEl.value?.select();
 });
-
-function onEnter(e: KeyboardEvent) {
-  // IME変換確定のEnter（isComposing）では確定しない。
-  if (e.isComposing) return;
-  commit();
-}
 
 function commit() {
   if (done) return;
