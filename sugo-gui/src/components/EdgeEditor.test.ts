@@ -82,18 +82,39 @@ describe("EdgeEditor", () => {
     expect(wrapper.emitted("reload")).toBeTruthy();
   });
 
-  it("does not double-invoke when Enter is pressed repeatedly while submitting", async () => {
+  it("Enterキーは何も起きない（invokeが呼ばれない・ラベル欄）", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockClear();
-    // invoke を保留させ、送信中に Enter 連打しても再入しないことを確認する
-    let resolve!: (v: { new_version: number; lock_version: number }) => void;
-    vi.mocked(invoke).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     const wrapper = mount(EdgeEditor, { props: addProps });
     const input = wrapper.find('[data-testid="edge-label"]');
     await input.setValue("次へ");
     await input.trigger("keydown", { key: "Enter" });
-    await input.trigger("keydown", { key: "Enter" });
-    await input.trigger("keydown", { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("Enterキーは何も起きない（invokeが呼ばれない・ガード欄）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const wrapper = mount(EdgeEditor, { props: addProps });
+    await wrapper.find('[data-testid="edge-label"]').setValue("次へ");
+    const guardInput = wrapper.find('[data-testid="edge-guard"]');
+    await guardInput.setValue("続ける");
+    await guardInput.trigger("keydown", { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not double-invoke when submit button is clicked repeatedly while submitting", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    // invoke を保留させ、送信中にボタン連打しても再入しないことを確認する
+    let resolve!: (v: { new_version: number; lock_version: number }) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    const wrapper = mount(EdgeEditor, { props: addProps });
+    await wrapper.find('[data-testid="edge-label"]').setValue("次へ");
+    const submitBtn = wrapper.find('[data-testid="edge-submit"]');
+    await submitBtn.trigger("click");
+    await submitBtn.trigger("click");
+    await submitBtn.trigger("click");
     expect(invoke).toHaveBeenCalledTimes(1);
     resolve({ new_version: 2, lock_version: 1 });
   });
