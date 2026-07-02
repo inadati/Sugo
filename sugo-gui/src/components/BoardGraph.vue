@@ -42,6 +42,14 @@
       @commit="onNodeNameCommit"
       @cancel="nodeEditor = null"
     />
+
+    <!-- 全体表示: レイアウト崩れ等でマスが画面外に見えなくなった場合の保険 -->
+    <button
+      data-testid="fit-view"
+      class="absolute top-2 right-2 z-20 px-2 py-1 text-xs bg-white border border-gray-300 rounded shadow hover:bg-gray-50"
+      title="全マスが収まるように表示し直す"
+      @click="fitView"
+    >全体表示</button>
   </div>
 </template>
 
@@ -124,10 +132,31 @@ function savePositions() {
   localStorage.setItem(lsKey(), JSON.stringify(pos));
 }
 
+// 過去のバグ等でlocalStorageに異常な座標（NaN・非有限値・極端に大きい値）が
+// 保存されていると、cy.fit()がそれを含めようとして異常にズームアウトし、
+// 離れた場所にある他のノードが実質見えなくなる（#はみ出し対応時に発覚）。
+// そのノードだけ「未保存」扱いにして自動配置に回すことで自己修復する。
+const MAX_SANE_COORD = 20000;
+
+function isSaneCoord(p: unknown): p is { x: number; y: number } {
+  if (!p || typeof p !== "object") return false;
+  const { x, y } = p as { x?: unknown; y?: unknown };
+  return (
+    typeof x === "number" && Number.isFinite(x) && Math.abs(x) <= MAX_SANE_COORD &&
+    typeof y === "number" && Number.isFinite(y) && Math.abs(y) <= MAX_SANE_COORD
+  );
+}
+
 function loadPositions(): PositionMap | null {
   try {
     const raw = localStorage.getItem(lsKey());
-    return raw ? (JSON.parse(raw) as PositionMap) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PositionMap;
+    const sanitized: PositionMap = {};
+    for (const [id, p] of Object.entries(parsed)) {
+      if (isSaneCoord(p)) sanitized[id] = p;
+    }
+    return sanitized;
   } catch {
     return null;
   }
@@ -142,25 +171,72 @@ function applyPositions(positions: PositionMap) {
 
 // ── グラフ要素構築 ────────────────────────────────────────────────────
 
+// cytoscape の text-wrap: "wrap" は単語（空白）境界でしか折り返さないため、
+// スペースを含まない日本語のようなテキストは折り返されずノード幅からはみ出す。
+// 実際のテキスト幅を測って自前で改行（\n）を挿入することで確実に折り返す。
+const NODE_FONT = "12px sans-serif";
+const NODE_TEXT_MAX_WIDTH = 140;
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+function wrapText(text: string, maxWidthPx: number): string {
+  if (!measureCtx) {
+    measureCtx = document.createElement("canvas").getContext("2d");
+  }
+  if (!measureCtx) return text;
+  measureCtx.font = NODE_FONT;
+  const lines: string[] = [];
+  let currentLine = "";
+  for (const ch of text) {
+    const testLine = currentLine + ch;
+    if (measureCtx.measureText(testLine).width > maxWidthPx && currentLine.length > 0) {
+      lines.push(currentLine);
+      currentLine = ch;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.join("\n");
+}
+
 function buildLabel(c: CellData): string {
   const badges: string[] = [];
   if (c.id === props.startCellId) badges.push("START");
   if (c.terminal) badges.push("END");
   if (c.status === "draft") badges.push("draft");
-  return badges.length ? `${c.name}\n${badges.join(" · ")}` : c.name;
+  const wrappedName = wrapText(c.name, NODE_TEXT_MAX_WIDTH);
+  return badges.length ? `${wrappedName}\n${badges.join(" · ")}` : wrappedName;
+}
+
+// cytoscape の height: "label" は要素追加直後のラベル計測タイミングに
+// 依存し、fit() が実行される時点でまだ正しい高さが反映されていない
+// ことがあった（マスが表示領域外に配置されて見えなくなる不具合の一因）。
+// 折り返し行数は buildLabel の時点で確定しているため、高さも自前で
+// 計算して `data(height)` として明示的に渡す（cytoscapeの非同期計測に
+// 依存しない）。NODE_LINE_HEIGHT はスタイルの line-height（1.6倍）に
+// 合わせて計算する（font-size 12px × 1.6 ≒ 19.2px に余裕を足した値）。
+const NODE_LINE_HEIGHT = 22;
+const NODE_VERTICAL_PADDING = 24;
+
+function buildHeight(label: string): number {
+  const lineCount = label.split("\n").length;
+  return lineCount * NODE_LINE_HEIGHT + NODE_VERTICAL_PADDING;
 }
 
 function buildElements(): cytoscape.ElementDefinition[] {
-  const nodes: cytoscape.ElementDefinition[] = props.cells.map((c) => ({
-    data: { id: c.id, label: buildLabel(c) },
-    classes: [
-      c.id === props.startCellId ? "start" : "",
-      c.terminal ? "terminal" : "",
-      c.status === "draft" ? "draft" : "",
-    ]
-      .filter(Boolean)
-      .join(" "),
-  }));
+  const nodes: cytoscape.ElementDefinition[] = props.cells.map((c) => {
+    const label = buildLabel(c);
+    return {
+      data: { id: c.id, label, height: buildHeight(label) },
+      classes: [
+        c.id === props.startCellId ? "start" : "",
+        c.terminal ? "terminal" : "",
+        c.status === "draft" ? "draft" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+  });
 
   const edges: cytoscape.ElementDefinition[] = props.edges.map((e, i) => ({
     data: {
@@ -199,12 +275,13 @@ const STYLES: cytoscape.CytoscapeOptions["style"] = [
       "text-valign": "center",
       "text-halign": "center",
       width: "150px",
-      height: "52px",
+      height: "data(height)",
       shape: "roundrectangle",
       "font-size": "12px",
       color: "#1f2937",
       "text-wrap": "wrap",
       "text-max-width": "140px",
+      "line-height": 1.6,
     },
   },
   {
@@ -316,9 +393,16 @@ function placeNewNodes(saved: PositionMap, missingIds: string[]) {
 ///
 /// ノードが1〜数個だけのとき cy.fit() は画面いっぱいに拡大して不恰好になるため、
 /// 等倍（1.0）を上限にクランプし、はみ出さない場合は中央寄せする。
+///
+/// cy.resize() を先に呼び、cytoscape内部に現在のコンテナの実サイズを
+/// 再認識させてから fit する。マウント直後などflexboxレイアウトが
+/// まだ確定していないタイミングでfitが走ると、古い（小さい）サイズを
+/// 基準に計算してしまい、一部のノードが実際の表示領域外に配置されて
+/// 見えなくなることがあったため。
 const MAX_FIT_ZOOM = 1.0;
 function fitView() {
   if (!cy) return;
+  cy.resize();
   cy.fit(undefined, 40);
   if (cy.zoom() > MAX_FIT_ZOOM) {
     cy.zoom(MAX_FIT_ZOOM);
@@ -425,7 +509,11 @@ function initCy() {
     });
   });
 
-  placeNodes();
+  // マウント直後は親のflexboxレイアウトがまだ確定していないことがあり、
+  // その状態で fit すると古い（小さい）コンテナサイズを基準に計算されて
+  // 一部のノードが実際の表示領域外に配置されることがあった。
+  // requestAnimationFrame で最低1回描画を経てからレイアウトを確定させる。
+  requestAnimationFrame(() => placeNodes());
 }
 
 /// cytoscape のレンダリング座標（コンテナ相対）を画面座標へ変換する。
@@ -499,7 +587,7 @@ function refresh() {
 
 function onResize() {
   if (!cy || !container.value) return;
-  cy.resize();
+  // fitView() 内で cy.resize() を呼ぶため、ここでは呼ばない。
   fitView();
   computeMarkerPositions();
 }
@@ -521,5 +609,5 @@ onUnmounted(() => {
 watch(() => [props.cells, props.edges, props.startCellId], refresh, { deep: true });
 watch(() => props.activeRuns, computeMarkerPositions, { deep: true });
 
-defineExpose({ buildLabel, buildElements });
+defineExpose({ buildLabel, buildElements, fitView });
 </script>

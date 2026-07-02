@@ -21,7 +21,6 @@
         autocapitalize="off"
         spellcheck="false"
         class="w-full border border-gray-300 rounded px-2 py-1 mb-2 focus:outline-none focus:border-blue-400"
-        @keydown.enter="onEnter"
       />
       <label class="block text-xs text-gray-500 mb-1">ガード条件（任意）</label>
       <input
@@ -34,7 +33,6 @@
         autocapitalize="off"
         spellcheck="false"
         class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
-        @keydown.enter="onEnter"
       />
       <p v-if="errorMsg" class="text-red-500 text-xs mb-2">{{ errorMsg }}</p>
       <div class="flex justify-end gap-2">
@@ -90,14 +88,8 @@ const anchorStyle = computed(() => {
   };
 });
 
-function onEnter(e: KeyboardEvent) {
-  // IME変換確定のEnter（isComposing）では送信しない。
-  if (e.isComposing) return;
-  void submit();
-}
-
 async function submit() {
-  if (submitting.value) return; // 送信中の二重送信（Enter連打）を防ぐ
+  if (submitting.value) return; // 送信中の二重送信（ボタン連打）を防ぐ
   if (!label.value.trim()) {
     errorMsg.value = "ラベルを入力してください。";
     return;

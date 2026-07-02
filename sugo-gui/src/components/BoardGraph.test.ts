@@ -42,6 +42,8 @@ vi.mock("cytoscape", () => {
       edgehandles: () => cy.__eh,
       fit: vi.fn(),
       resize: vi.fn(),
+      zoom: vi.fn(() => 1),
+      center: vi.fn(),
       destroy: vi.fn(),
     };
     cy.__eh = {
@@ -83,6 +85,14 @@ function mountGraph(edges: EdgeInput[] = sampleEdges) {
 describe("BoardGraph", () => {
   it("renders without crashing", () => {
     expect(mountGraph().exists()).toBe(true);
+  });
+
+  it("「全体表示」ボタンをクリックすると cy.fit が呼ばれる", async () => {
+    const wrapper = mountGraph();
+    const cy = lastCy();
+    cy.fit.mockClear();
+    await wrapper.find('[data-testid="fit-view"]').trigger("click");
+    expect(cy.fit).toHaveBeenCalled();
   });
 
   it("adds START badge to start cell label", () => {

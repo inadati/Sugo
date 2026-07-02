@@ -20,7 +20,7 @@
       autocapitalize="off"
       spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
-      @keydown.enter="onNameEnter"
+      @blur="save"
     />
 
     <!-- メタ情報 -->
@@ -46,15 +46,8 @@
       autocapitalize="off"
       spellcheck="false"
       class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400 resize-none"
+      @blur="save"
     />
-
-    <!-- 保存 -->
-    <button
-      data-testid="save"
-      class="w-full px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
-      :disabled="saving"
-      @click="save"
-    >保存</button>
     <p v-if="errorMsg" data-testid="save-error" class="text-red-500 text-sm mt-1">{{ errorMsg }}</p>
 
     <!-- マス削除（START 以外は draft/active を問わず削除可） -->
@@ -97,42 +90,67 @@ const saving = ref(false);
 const deleting = ref(false);
 const deleteErrorMsg = ref("");
 const memoDraft = ref(props.cell.memo);
+// このパネルが把握している最新のlock_version。props.lockVersionは親の
+// 再読込が完了するまで古いままなことがあるため、保存成功のたびにここを
+// 更新し、以降の保存・削除はこちらを使う。
+const currentLockVersion = ref(props.lockVersion);
+// 直近の保存に使った値。「変更なし」判定はこれと比較する（propsは親の
+// 再読込タイミング次第で古いままの場合があるため使わない）。
+const lastSavedName = ref(props.cell.name);
+const lastSavedMemo = ref(props.cell.memo);
+// 保存中に別フィールドのblurで再度saveが呼ばれた場合、内容を破棄せず
+// 現在の保存完了後にもう一度saveし直すためのフラグ。
+let saveQueued = false;
 
 watch(() => props.cell.id, () => {
   nameDraft.value = props.cell.name;
   errorMsg.value = "";
   deleteErrorMsg.value = "";
   memoDraft.value = props.cell.memo;
+  currentLockVersion.value = props.lockVersion;
+  lastSavedName.value = props.cell.name;
+  lastSavedMemo.value = props.cell.memo;
+  saveQueued = false;
 });
 
-function onNameEnter(e: KeyboardEvent) {
-  // IME変換確定のEnter（isComposing）では保存しない。日本語入力等での意図しない保存・パネルクローズを防ぐ。
-  if (e.isComposing) return;
-  void save();
-}
-
 async function save() {
+  // タイトル欄・メモ欄いずれかからフォーカスが外れたタイミングで自動保存する。
+  // 保存中に別フィールドのblurで再入した場合は、その場では何もせず
+  // saveQueuedを立てて、進行中の保存が終わり次第もう一度saveする
+  // （編集内容を黙って破棄しない）。
+  if (saving.value) {
+    saveQueued = true;
+    return;
+  }
+  if (nameDraft.value === lastSavedName.value && memoDraft.value === lastSavedMemo.value) return;
   if (!nameDraft.value.trim()) {
     errorMsg.value = "タイトルを入力してください。";
     return;
   }
+  // 送信直前の値をキャプチャする。await中にユーザーがさらに編集した場合、
+  // nameDraft/memoDraftのライブな値ではなく「実際に今回送信する値」を
+  // lastSaved*に記録することで、キューされた再保存の変更判定がずれないようにする。
+  const nameToSave = nameDraft.value.trim();
+  const memoToSave = memoDraft.value;
   saving.value = true;
   errorMsg.value = "";
   try {
     const renamed = await invoke<{ new_version: number; lock_version: number }>("rename_cell", {
       harnessId: props.harnessId,
       cellId: props.cell.id,
-      newName: nameDraft.value.trim(),
-      lockVersion: props.lockVersion,
+      newName: nameToSave,
+      lockVersion: currentLockVersion.value,
     });
     const memoSaved = await invoke<{ new_version: number; lock_version: number }>("set_cell_memo", {
       harnessId: props.harnessId,
       cellId: props.cell.id,
-      memo: memoDraft.value,
+      memo: memoToSave,
       lockVersion: renamed.lock_version,
     });
+    currentLockVersion.value = memoSaved.lock_version;
+    lastSavedName.value = nameToSave;
+    lastSavedMemo.value = memoToSave;
     emit("renamed", memoSaved.new_version, memoSaved.lock_version);
-    emit("close");
   } catch (e) {
     const msg = String(e);
     if (msg.includes("lock_conflict")) {
@@ -144,6 +162,10 @@ async function save() {
     }
   } finally {
     saving.value = false;
+    if (saveQueued) {
+      saveQueued = false;
+      void save();
+    }
   }
 }
 
@@ -154,7 +176,7 @@ async function deleteCell() {
     const result = await invoke<{ new_version: number; lock_version: number }>("delete_cell", {
       harnessId: props.harnessId,
       cellId: props.cell.id,
-      lockVersion: props.lockVersion,
+      lockVersion: currentLockVersion.value,
     });
     emit("deleted", result.new_version, result.lock_version);
   } catch (e) {

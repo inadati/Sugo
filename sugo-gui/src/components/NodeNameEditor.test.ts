@@ -5,11 +5,19 @@ import NodeNameEditor from "./NodeNameEditor.vue";
 const props = { initialName: "旧名", x: 100, y: 100, width: 150 };
 
 describe("NodeNameEditor", () => {
-  it("commits trimmed name on Enter", async () => {
+  it("Enterキーは何も起きない（commitはemitされない）", async () => {
     const wrapper = mount(NodeNameEditor, { props });
     const input = wrapper.find("input");
     await input.setValue("  新名  ");
     await input.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("commit")).toBeFalsy();
+  });
+
+  it("blurすると確定する（Enterは不要）", async () => {
+    const wrapper = mount(NodeNameEditor, { props });
+    const input = wrapper.find("input");
+    await input.setValue("  新名  ");
+    await input.trigger("blur");
     expect(wrapper.emitted("commit")?.[0]).toEqual(["新名"]);
   });
 
@@ -17,7 +25,7 @@ describe("NodeNameEditor", () => {
     const wrapper = mount(NodeNameEditor, { props });
     const input = wrapper.find("input");
     await input.setValue("   ");
-    await input.trigger("keydown", { key: "Enter" });
+    await input.trigger("blur");
     expect(wrapper.emitted("commit")).toBeFalsy();
   });
 
@@ -38,11 +46,11 @@ describe("NodeNameEditor", () => {
     expect(wrapper.emitted("cancel")?.length).toBe(1);
   });
 
-  it("commits only once when Enter is followed by blur", async () => {
+  it("commits only once even if blur fires twice", async () => {
     const wrapper = mount(NodeNameEditor, { props });
     const input = wrapper.find("input");
     await input.setValue("新名");
-    await input.trigger("keydown", { key: "Enter" });
+    await input.trigger("blur");
     await input.trigger("blur");
     expect(wrapper.emitted("commit")?.length).toBe(1);
   });
