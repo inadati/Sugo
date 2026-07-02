@@ -7,6 +7,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("NewHarnessDialog", () => {
+  it("Enterキーは何も起きない（invokeが呼ばれない）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const wrapper = mount(NewHarnessDialog);
+    await wrapper.find('[data-testid="name"]').setValue("しりとりデモ");
+    await wrapper.find('[data-testid="name"]').trigger("keydown", { key: "Enter" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("emits close when cancel clicked", async () => {
     const wrapper = mount(NewHarnessDialog);
     await wrapper.find('[data-testid="cancel"]').trigger("click");

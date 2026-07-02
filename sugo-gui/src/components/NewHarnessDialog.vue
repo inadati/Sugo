@@ -13,7 +13,6 @@
         autocapitalize="off"
         spellcheck="false"
         class="w-full border border-gray-300 rounded px-3 py-2 mb-3 focus:outline-none focus:border-blue-400"
-        @keydown.enter="onNameEnter"
       />
       <label class="block text-xs text-gray-500 mb-1">説明（任意）</label>
       <textarea
@@ -55,12 +54,6 @@ const name = ref("");
 const description = ref("");
 const errorMsg = ref("");
 const submitting = ref(false);
-
-function onNameEnter(e: KeyboardEvent) {
-  // IME変換確定のEnter（isComposing）では送信しない。
-  if (e.isComposing) return;
-  void submit();
-}
 
 async function submit() {
   if (submitting.value) return;
