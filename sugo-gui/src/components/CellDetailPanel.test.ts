@@ -170,6 +170,63 @@ describe("CellDetailPanel", () => {
     expect(wrapper.emitted("close")).toBeFalsy();
   });
 
+  it("保存中に別フィールドがblurしても編集内容を失わず再保存する（キューイング）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+
+    let resolveMemoSave!: (v: { new_version: number; lock_version: number }) => void;
+    vi.mocked(invoke)
+      // 1回目 rename_cell: 即解決
+      .mockResolvedValueOnce({ new_version: 2, lock_version: 1 })
+      // 1回目 set_cell_memo: ここで止める（この時点のmemoDraftである "" を
+      // ペイロードとして既に読み取り済みで送信中、という状況を作る）
+      .mockImplementationOnce(() => new Promise((r) => { resolveMemoSave = r; }))
+      // 2回目（キューされた再保存） rename_cell
+      .mockResolvedValueOnce({ new_version: 4, lock_version: 3 })
+      // 2回目（キューされた再保存） set_cell_memo
+      .mockResolvedValueOnce({ new_version: 5, lock_version: 4 });
+
+    const wrapper = mount(CellDetailPanel, {
+      props: { harnessId: "h1", cell, lockVersion: 0 },
+    });
+
+    // タイトルを編集してblur → 1回目の保存が開始し、set_cell_memo が
+    // in-flight のまま止まる（この時点のmemoDraftは初期値の ""）
+    await wrapper.find('[data-testid="name-input"]').setValue("new");
+    await wrapper.find('[data-testid="name-input"]').trigger("blur");
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // set_cell_memo（1回目）が "" で呼ばれた直後の状態で保留中であることを確認
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_cell_memo", {
+      harnessId: "h1", cellId: "c1", memo: "", lockVersion: 1,
+    });
+
+    // 1回目の保存が完了しないうちに、メモ欄を編集してblur
+    // → 破棄されず saveQueued が立つだけで、この時点では新規invokeは発生しない
+    await wrapper.find('[data-testid="memo-input"]').setValue("あとから書いたメモ");
+    await wrapper.find('[data-testid="memo-input"]').trigger("blur");
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    // 1回目の set_cell_memo を解決 → 1回目の保存が完了し、
+    // キューされていた2回目の保存が自動的に走る
+    resolveMemoSave({ new_version: 3, lock_version: 2 });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 2回目の保存で、あとから書いたメモの内容が正しいlockVersionで送信され、
+    // 破棄されていないことを確認する
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenNthCalledWith(3, "rename_cell", {
+      harnessId: "h1", cellId: "c1", newName: "new", lockVersion: 2,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(4, "set_cell_memo", {
+      harnessId: "h1", cellId: "c1", memo: "あとから書いたメモ", lockVersion: 3,
+    });
+    expect(wrapper.emitted("renamed")).toEqual([[3, 2], [5, 4]]);
+  });
+
   it("保存で lock_conflict が返るとエラーメッセージを表示しパネルは閉じない", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockRejectedValueOnce("lock_conflict");
