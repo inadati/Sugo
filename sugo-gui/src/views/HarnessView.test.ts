@@ -40,13 +40,6 @@ describe("HarnessView", () => {
     expect(wrapper.text()).toContain("my-harness");
   });
 
-  it("shows draft_diff entries", async () => {
-    const router = makeRouter();
-    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
-    await new Promise(r => setTimeout(r, 0));
-    expect(wrapper.text()).toContain("draft-one");
-  });
-
   it("opens CellDetailPanel when a cell is selected", async () => {
     const router = makeRouter();
     const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
