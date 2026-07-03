@@ -20,14 +20,6 @@
     <!-- トースト -->
     <div v-if="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded shadow">{{ toast }}</div>
 
-    <!-- ドラフト差分 -->
-    <div v-if="detail.draft_diff.length > 0" class="shrink-0 mb-3 bg-yellow-50 border border-yellow-200 rounded p-3">
-      <p class="text-sm font-medium text-yellow-800 mb-1">ドラフトセル（エージェントへ共有）</p>
-      <ul class="text-sm text-yellow-700 space-y-0.5">
-        <li v-for="d in detail.draft_diff" :key="d.cell_id">・{{ d.name }} ({{ d.cell_id }})</li>
-      </ul>
-    </div>
-
     <!-- 盤面グラフ -->
     <BoardGraph
       class="flex-1 min-h-0"

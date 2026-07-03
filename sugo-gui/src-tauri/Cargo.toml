@@ -1,6 +1,6 @@
 [package]
 name = "sugo-gui"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2024"
 
 [lib]
