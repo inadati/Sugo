@@ -42,7 +42,7 @@ tools: []
 
 - `has_draft: true` のハーネスが選ばれた場合：「このハーネスにはドラフトセルがあるため起動できません。`/sugo:sugo-draft-resolve` で解決してください。」と伝える
 - それ以外は `sugo_start(harness_id=..., project_path=<カレントディレクトリ>)` を呼び出す
-- `project_path` は `/Users/ittan/Asweed/sandbox/Sugo` を使う
+- `project_path` は必ず「このスキルが実行されているNipperタブの実際のカレントディレクトリ」を使うこと。固定パスをハードコードしてはならない（タブごとにプロジェクトパスが異なるため、誤ったパスを指定すると別タブに誤配信される）
 
 ### 4. 起動後は待機
 

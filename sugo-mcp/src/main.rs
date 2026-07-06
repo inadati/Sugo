@@ -603,7 +603,8 @@ async fn main() -> anyhow::Result<()> {
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
 
     let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
-    // Start the per-process callback server on an ephemeral port.
+    // Start the machine-wide callback server on its fixed port, or reuse the
+    // URL of an already-running instance if the port is taken (see callback.rs).
     let callback_state = callback::CallbackState {
         run_repo: run_repo.clone(),
         clock: Arc::new(RealIdClock),

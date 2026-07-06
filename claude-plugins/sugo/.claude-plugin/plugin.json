@@ -1,6 +1,6 @@
 {
   "name": "sugo",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Sugo ハーネス操作スキル群。sugo-launcher でハーネスを番号選択で即起動、sugo-cell-author でセルプロンプトを整合性を保ちながら編集、sugo-draft-resolve でドラフトセルを一括解決してハーネスを起動可能状態に昇格させる。",
   "author": {
     "name": "inadati"

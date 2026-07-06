@@ -1,9 +1,14 @@
 //! Local callback HTTP server for Nipper liveness callbacks.
 //!
-//! Each sugo-mcp process binds an ephemeral port and serves:
+//! Exactly one sugo-mcp process on the machine binds the fixed callback port
+//! and serves:
 //!   POST /heartbeat      {run_id}          -> records last_heartbeat_at
 //!   POST /session-event  {run_id, reason}  -> updates run status
 //! The bound URL is handed to Nipper as `sugo_callback_url` at /attach time.
+//! Other concurrently running sugo-mcp processes (e.g. from other Nipper
+//! windows) fail to bind and instead reuse the same fixed URL, since the
+//! shared SQLite DB is the source of truth regardless of which process
+//! actually receives the callback HTTP request.
 
 use std::sync::Arc;
 
@@ -99,16 +104,31 @@ pub const CALLBACK_PORT: u16 = 8772;
 
 /// Bind the fixed callback port and start the callback server.
 /// Returns the callback base URL (e.g. "http://127.0.0.1:8772").
-/// Fails if port 8772 is already in use (e.g. a previous instance still running).
+///
+/// If the port is already in use — another sugo-mcp process is already
+/// serving it, e.g. from a different concurrently running Nipper window —
+/// this process does not start its own listener but still returns the same
+/// fixed URL. That is safe because the callback handlers only ever touch the
+/// shared SQLite DB, so whichever process holds the port can service
+/// callbacks for runs started by any other process.
 pub async fn start(state: CallbackState) -> anyhow::Result<String> {
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{CALLBACK_PORT}")).await
-        .map_err(|e| anyhow::anyhow!("failed to bind callback port {CALLBACK_PORT}: {e} (is a previous sugo-mcp still running?)"))?;
-    let addr = listener.local_addr()?;
-    let app = router(state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    Ok(format!("http://{addr}"))
+    match tokio::net::TcpListener::bind(format!("127.0.0.1:{CALLBACK_PORT}")).await {
+        Ok(listener) => {
+            let addr = listener.local_addr()?;
+            let app = router(state);
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Ok(format!("http://{addr}"))
+        }
+        Err(e) => {
+            eprintln!(
+                "sugo-mcp: callback port {CALLBACK_PORT} already in use ({e}); \
+                 assuming another sugo-mcp instance is serving it and reusing its URL"
+            );
+            Ok(format!("http://127.0.0.1:{CALLBACK_PORT}"))
+        }
+    }
 }
 
 #[cfg(test)]

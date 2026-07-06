@@ -11,7 +11,7 @@
       "name": "sugo",
       "source": "./claude-plugins/sugo",
       "description": "Sugo ハーネス操作スキル群。ハーネスの起動・セル編集・ドラフト解決を提供する。sugo-launcher で番号選択起動、sugo-cell-author でプロンプト品質を保証、sugo-draft-resolve でドラフトセルを一括解決する。",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": {
         "name": "inadati"
       },
