@@ -143,6 +143,23 @@ pub struct EdgeAddArgs {
     pub guard: Option<String>,
 }
 
+/// A new cell to add in a `sugo_update_harness` call.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CellAddArgs {
+    /// Board-unique identifier for the new cell. Caller-specified (e.g. a UUID);
+    /// must not collide with an existing cell id or another cell_add entry in
+    /// the same call.
+    pub id: String,
+    /// Human-readable label for the new cell.
+    pub name: String,
+    /// Prompt text for the new cell.
+    pub prompt: String,
+    /// "active" or "draft"; required (no default).
+    pub status: String,
+    /// Whether the new cell terminates the board.
+    pub terminal: bool,
+}
+
 /// Arguments for `sugo_update_harness`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateArgs {
@@ -153,6 +170,10 @@ pub struct UpdateArgs {
     /// Per-cell changes (prompt and/or status); defaults to empty.
     #[serde(default)]
     pub cell_changes: Vec<CellChangeArgs>,
+    /// New cells to add; defaults to empty. Every field within each entry is
+    /// required (no per-field defaults): id, name, prompt, status, terminal.
+    #[serde(default)]
+    pub cell_add: Vec<CellAddArgs>,
     /// Edges to add; defaults to empty.
     #[serde(default)]
     pub edge_add: Vec<EdgeAddArgs>,
@@ -272,13 +293,12 @@ mod tests {
 
     #[test]
     fn update_args_cell_changes_default_to_empty() {
-        let args: UpdateArgs = serde_json::from_str(
-            r#"{"harness_id":"h1","expected_lock_version":3}"#,
-        )
-        .unwrap();
+        let args: UpdateArgs =
+            serde_json::from_str(r#"{"harness_id":"h1","expected_lock_version":3}"#).unwrap();
         assert_eq!(args.harness_id, "h1");
         assert_eq!(args.expected_lock_version, 3);
         assert!(args.cell_changes.is_empty());
+        assert!(args.cell_add.is_empty());
         assert!(args.edge_add.is_empty());
         assert!(args.edge_remove.is_empty());
     }
@@ -289,6 +309,7 @@ mod tests {
             "harness_id": "h1",
             "expected_lock_version": 2,
             "cell_changes": [{"cell_id":"c1","prompt":"new","status":"active"}],
+            "cell_add": [{"id":"c9","name":"ninth","prompt":"do ninth","status":"draft","terminal":false}],
             "edge_add": [{"from":"c1","to":"c2","label":"next"}],
             "edge_remove": [{"from":"c2","to":"c3","label":"old"}]
         }"#;
@@ -296,6 +317,11 @@ mod tests {
         assert_eq!(args.cell_changes[0].cell_id, "c1");
         assert_eq!(args.cell_changes[0].prompt.as_deref(), Some("new"));
         assert_eq!(args.cell_changes[0].status.as_deref(), Some("active"));
+        assert_eq!(args.cell_add[0].id, "c9");
+        assert_eq!(args.cell_add[0].name, "ninth");
+        assert_eq!(args.cell_add[0].prompt, "do ninth");
+        assert_eq!(args.cell_add[0].status, "draft");
+        assert!(!args.cell_add[0].terminal);
         assert_eq!(args.edge_add[0].from, "c1");
         assert_eq!(args.edge_remove[0].label, "old");
     }
@@ -313,5 +339,48 @@ mod tests {
         let args: EdgeAddArgs =
             serde_json::from_str(r#"{"from":"c1","to":"c2","label":"next"}"#).unwrap();
         assert!(args.guard.is_none());
+    }
+
+    #[test]
+    fn cell_add_args_missing_status_is_deserialize_error() {
+        // status has no default — omitting any required field must be a
+        // deserialize error, unlike CellChangeArgs's optional fields.
+        let res: Result<CellAddArgs, _> =
+            serde_json::from_str(r#"{"id":"c9","name":"ninth","prompt":"p","terminal":false}"#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn cell_add_args_missing_id_is_deserialize_error() {
+        // id has no default — omitting it must be a deserialize error.
+        let res: Result<CellAddArgs, _> = serde_json::from_str(
+            r#"{"name":"ninth","prompt":"p","status":"active","terminal":false}"#,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn cell_add_args_missing_name_is_deserialize_error() {
+        // name has no default — omitting it must be a deserialize error.
+        let res: Result<CellAddArgs, _> =
+            serde_json::from_str(r#"{"id":"c9","prompt":"p","status":"active","terminal":false}"#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn cell_add_args_missing_prompt_is_deserialize_error() {
+        // prompt has no default — omitting it must be a deserialize error.
+        let res: Result<CellAddArgs, _> = serde_json::from_str(
+            r#"{"id":"c9","name":"ninth","status":"active","terminal":false}"#,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn cell_add_args_missing_terminal_is_deserialize_error() {
+        // terminal has no default — omitting it must be a deserialize error.
+        let res: Result<CellAddArgs, _> =
+            serde_json::from_str(r#"{"id":"c9","name":"ninth","prompt":"p","status":"active"}"#);
+        assert!(res.is_err());
     }
 }

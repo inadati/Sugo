@@ -70,7 +70,11 @@ impl SugoServer {
         let out = create_harness(
             self.repo.as_ref(),
             self.clock.as_ref(),
-            CreateHarnessInput { name: args.name, description: args.description, definition: args.definition },
+            CreateHarnessInput {
+                name: args.name,
+                description: args.description,
+                definition: args.definition,
+            },
         )
         .await
         .map_err(error::to_tool_error)?;
@@ -80,18 +84,22 @@ impl SugoServer {
             "version_no": out.version_no,
             "lock_version": out.lock_version,
         });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Report a harness's current status, or a summary of all harnesses.
-    #[tool(description = "Get status. With harness_id: returns { harness_id, name, \
+    #[tool(
+        description = "Get status. With harness_id: returns { harness_id, name, \
         current_version, has_draft, cells:[{id,name,status,terminal}], edges:[...], \
         draft_diff:[{cell_id,name,memo}], \
         running_runs:[{run_id, current_cell_id, is_stalled, secs_since_last_modified}] }. \
         draft_diff's memo is the human's request_memo for that draft cell (empty string \
         for newly added cells with no request). \
         running_runs contains all Running-state runs with on-demand stall detection via \
-        jsonl mtime (timeout 300 s). Without harness_id: returns { harnesses:[...] }.")]
+        jsonl mtime (timeout 300 s). Without harness_id: returns { harnesses:[...] }."
+    )]
     async fn sugo_status(
         &self,
         Parameters(args): Parameters<tools::StatusArgs>,
@@ -138,7 +146,9 @@ impl SugoServer {
 
                 // On-demand stall detection: list Running runs and check each
                 // one's project_path via jsonl mtime (timeout 300 s).
-                let all_runs = self.run_repo.list_by_harness(&harness_id)
+                let all_runs = self
+                    .run_repo
+                    .list_by_harness(&harness_id)
                     .await
                     .map_err(error::to_tool_error)?;
 
@@ -146,9 +156,10 @@ impl SugoServer {
                     .iter()
                     .filter(|r| r.status == sugo_core::domain::run::RunStatus::Running)
                     .map(|r| {
-                        let stall = r.project_path.as_deref().map(|p| {
-                            sugo_infra::jsonl_watcher::check_stall(p, 300)
-                        });
+                        let stall = r
+                            .project_path
+                            .as_deref()
+                            .map(|p| sugo_infra::jsonl_watcher::check_stall(p, 300));
                         let (is_stalled, secs) = match stall {
                             Some(info) => (
                                 info.is_stalled,
@@ -197,13 +208,17 @@ impl SugoServer {
                 serde_json::json!({ "harnesses": harnesses })
             }
         };
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Replace a cell's prompt, producing a new immutable board version.
-    #[tool(description = "Edit a cell's prompt. Generates a new board version and bumps the \
+    #[tool(
+        description = "Edit a cell's prompt. Generates a new board version and bumps the \
         optimistic lock. expected_lock_version must match the current lock or a \
-        lock_conflict error is returned. Returns the new_version and lock_version.")]
+        lock_conflict error is returned. Returns the new_version and lock_version."
+    )]
     async fn sugo_edit_cell(
         &self,
         Parameters(args): Parameters<tools::EditArgs>,
@@ -228,7 +243,9 @@ impl SugoServer {
             "new_version": out.new_version,
             "lock_version": out.lock_version,
         });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Read a single cell's full detail, including its current prompt.
@@ -238,11 +255,13 @@ impl SugoServer {
     /// the read counterpart to `sugo_edit_cell` for callers that need the
     /// exact current prompt text, e.g. to revise it in light of a cell's
     /// `request_memo` before calling `sugo_edit_cell` or `sugo_update_harness`.
-    #[tool(description = "Get a single cell's full detail: { cell_id, name, prompt, status, \
+    #[tool(
+        description = "Get a single cell's full detail: { cell_id, name, prompt, status, \
         terminal, memo }. Unlike sugo_status (which never includes prompt), this returns the \
         cell's exact current prompt text — use this before revising a cell's prompt (e.g. in \
         light of its request_memo) so the revision is grounded in the actual current content, \
-        not a summary.")]
+        not a summary."
+    )]
     async fn sugo_get_cell(
         &self,
         Parameters(args): Parameters<tools::GetCellArgs>,
@@ -270,14 +289,18 @@ impl SugoServer {
             "terminal": cell.terminal,
             "memo": cell.request_memo,
         });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Validate a harness's board structure and return any issues.
-    #[tool(description = "Validate board structure. Pass harness_id to validate a stored \
+    #[tool(
+        description = "Validate board structure. Pass harness_id to validate a stored \
         harness, or definition to validate a board definition directly (exactly one). \
         Returns { ok, issues } where each issue has severity, code, message and an \
-        optional cell_id.")]
+        optional cell_id."
+    )]
     async fn sugo_validate_harness(
         &self,
         Parameters(args): Parameters<tools::ValidateArgs>,
@@ -310,10 +333,12 @@ impl SugoServer {
     }
 
     /// Start a harness run and inject the first cell's prompt into the Nipper message queue.
-    #[tool(description = "Start a harness run. Fails with draft_cells_exist if any cell is a \
+    #[tool(
+        description = "Start a harness run. Fails with draft_cells_exist if any cell is a \
         draft. Injects the first cell's prompt (with available edges and run_id) into the \
         Nipper message queue as the next user turn. Returns { run_id } only — the prompt and \
-        edges arrive exclusively via Nipper; do NOT act on them in this turn.")]
+        edges arrive exclusively via Nipper; do NOT act on them in this turn."
+    )]
     async fn sugo_start(
         &self,
         Parameters(args): Parameters<tools::StartArgs>,
@@ -332,23 +357,36 @@ impl SugoServer {
             self.repo.as_ref(),
             self.run_repo.as_ref(),
             self.clock.as_ref(),
-            StartRunInput { harness_id: args.harness_id, project_path: Some(project_path.clone()) },
+            StartRunInput {
+                harness_id: args.harness_id,
+                project_path: Some(project_path.clone()),
+            },
         )
         .await
         .map_err(error::to_tool_error)?;
 
         // Attach this run to the live Nipper chat session, then inject the first prompt.
-        let att = nipper_client::attach(&self.nipper_base, &project_path, &out.run_id, &self.callback_url).await;
+        let att = nipper_client::attach(
+            &self.nipper_base,
+            &project_path,
+            &out.run_id,
+            &self.callback_url,
+        )
+        .await;
         if let Some(e) = error::nipper_outcome_error(att) {
             return Err(e);
         }
         // Build the inject text: prompt + routing footer (run_id + edges).
         // Prompt and edges are intentionally NOT returned in the MCP response so that
         // Claude must wait for the Nipper-injected turn before acting on them.
-        let inject_text = build_inject_text(&out.prompt, &out.run_id, &out.edges, out.edges.is_empty());
+        let inject_text =
+            build_inject_text(&out.prompt, &out.run_id, &out.edges, out.edges.is_empty());
         // Mark inject pending before calling inject to avoid a race where Nipper's
         // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
-        let _ = self.run_repo.set_inject_pending(&out.run_id, Some(&self.clock.now_iso())).await;
+        let _ = self
+            .run_repo
+            .set_inject_pending(&out.run_id, Some(&self.clock.now_iso()))
+            .await;
         let inj = nipper_client::inject(&self.nipper_base, &project_path, &inject_text).await;
         if let Some(e) = error::nipper_outcome_error(inj) {
             let _ = self.run_repo.set_inject_pending(&out.run_id, None).await;
@@ -356,16 +394,20 @@ impl SugoServer {
         }
 
         let payload = serde_json::json!({ "run_id": out.run_id });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Advance a run along the given edge label and inject the next cell's prompt into Nipper.
-    #[tool(description = "Advance a run along edge_label from the current cell. Injects the \
+    #[tool(
+        description = "Advance a run along edge_label from the current cell. Injects the \
         next cell's prompt (with available edges and run_id) into the Nipper message queue as \
         the next user turn. Returns { ok, terminal } only — the next prompt and edges arrive \
         exclusively via Nipper; do NOT act on them in this turn. terminal=true means the run \
         is complete. Blocked with inject_pending if Nipper has not yet delivered the previous \
-        inject.")]
+        inject."
+    )]
     async fn sugo_advance(
         &self,
         Parameters(args): Parameters<tools::AdvanceArgs>,
@@ -408,7 +450,10 @@ impl SugoServer {
             self.repo.as_ref(),
             self.run_repo.as_ref(),
             self.clock.as_ref(),
-            AdvanceRunInput { run_id: args.run_id, edge_label: args.edge_label },
+            AdvanceRunInput {
+                run_id: args.run_id,
+                edge_label: args.edge_label,
+            },
         )
         .await
         .map_err(error::to_tool_error)?;
@@ -419,15 +464,22 @@ impl SugoServer {
         if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await
             && let Some(pp) = run.project_path.as_deref()
         {
-            let inject_text = build_inject_text(&out.prompt, &run_id_for_lookup, &out.edges, out.terminal);
+            let inject_text =
+                build_inject_text(&out.prompt, &run_id_for_lookup, &out.edges, out.terminal);
             // Mark inject pending before calling inject to avoid a race where Nipper's
             // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
             if !out.terminal {
-                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso())).await;
+                let _ = self
+                    .run_repo
+                    .set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso()))
+                    .await;
             }
             let inj = nipper_client::inject(&self.nipper_base, pp, &inject_text).await;
             if let Some(e) = error::nipper_outcome_error(inj) {
-                let _ = self.run_repo.set_inject_pending(&run_id_for_lookup, None).await;
+                let _ = self
+                    .run_repo
+                    .set_inject_pending(&run_id_for_lookup, None)
+                    .await;
                 return Err(e);
             }
             if out.terminal {
@@ -439,7 +491,9 @@ impl SugoServer {
             "ok": true,
             "terminal": out.terminal,
         });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Batch-update cells and edges in one new board version.
@@ -450,17 +504,21 @@ impl SugoServer {
         Setting memo here does NOT auto-change status — unlike the GUI's memo-save flow, this tool \
         applies status and memo independently, so pass status explicitly (e.g. status:'active' \
         alongside memo:'' when resolving a draft). \
+        cell_add: [{id, name, prompt, status, terminal}] — new cells to add. All fields are required \
+        (no defaults): id must be caller-specified and must not collide with an existing cell id or \
+        another cell_add entry in the same call (rejected with a validation_failed error carrying a \
+        duplicate_cell_id issue); status must be 'active' or 'draft'. Cells added here can be \
+        referenced by id in this same call's edge_add. \
         edge_add: [{from, to, label, guard?}] — edges to add. \
         edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
-        All three arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
+        All four arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
     async fn sugo_update_harness(
         &self,
         Parameters(args): Parameters<tools::UpdateArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        use sugo_core::domain::cell::CellStatus;
         use sugo_core::domain::edge::{Edge, Guard};
         use sugo_core::usecase::update_harness::{
-            CellChange, EdgeKey, UpdateHarnessInput, update_harness,
+            CellAdd, CellChange, EdgeKey, UpdateHarnessInput, update_harness,
         };
 
         let cell_changes: Vec<CellChange> = args
@@ -468,15 +526,29 @@ impl SugoServer {
             .into_iter()
             .map(|c| {
                 let status = match c.status.as_deref() {
-                    None => Ok(None),
-                    Some("active") => Ok(Some(CellStatus::Active)),
-                    Some("draft") => Ok(Some(CellStatus::Draft)),
-                    Some(other) => Err(ErrorData::invalid_params(
-                        format!("unknown status '{}': must be 'active' or 'draft'", other),
-                        Some(serde_json::json!({ "code": "invalid_arguments" })),
-                    )),
-                }?;
-                Ok(CellChange { cell_id: c.cell_id, prompt: c.prompt, status, memo: c.memo })
+                    None => None,
+                    Some(s) => Some(parse_cell_status(s)?),
+                };
+                Ok(CellChange {
+                    cell_id: c.cell_id,
+                    prompt: c.prompt,
+                    status,
+                    memo: c.memo,
+                })
+            })
+            .collect::<Result<_, ErrorData>>()?;
+
+        let cell_add: Vec<CellAdd> = args
+            .cell_add
+            .into_iter()
+            .map(|a| {
+                Ok(CellAdd {
+                    id: a.id,
+                    name: a.name,
+                    prompt: a.prompt,
+                    status: parse_cell_status(&a.status)?,
+                    terminal: a.terminal,
+                })
             })
             .collect::<Result<_, ErrorData>>()?;
 
@@ -494,7 +566,11 @@ impl SugoServer {
         let edge_remove: Vec<EdgeKey> = args
             .edge_remove
             .into_iter()
-            .map(|k| EdgeKey { from: k.from, to: k.to, label: k.label })
+            .map(|k| EdgeKey {
+                from: k.from,
+                to: k.to,
+                label: k.label,
+            })
             .collect();
 
         let out = update_harness(
@@ -504,6 +580,7 @@ impl SugoServer {
                 harness_id: args.harness_id,
                 expected_lock_version: args.expected_lock_version,
                 cell_changes,
+                cell_add,
                 edge_add,
                 edge_remove,
             },
@@ -516,12 +593,16 @@ impl SugoServer {
             "new_version": out.new_version,
             "lock_version": out.lock_version,
         });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
     }
 
     /// Update a harness's description (metadata only; no new board version is created).
-    #[tool(description = "Set or clear a harness's description. Pass description=null to clear. \
-        Returns { ok: true }.")]
+    #[tool(
+        description = "Set or clear a harness's description. Pass description=null to clear. \
+        Returns { ok: true }."
+    )]
     async fn sugo_set_description(
         &self,
         Parameters(args): Parameters<tools::SetDescriptionArgs>,
@@ -531,7 +612,25 @@ impl SugoServer {
             .await
             .map_err(error::to_tool_error)?;
         let payload = serde_json::json!({ "ok": true });
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+}
+
+/// Parse a status string from the MCP boundary into a `CellStatus`, or an
+/// `invalid_arguments` tool error for any value other than "active"/"draft".
+/// Shared by `cell_changes` (optional) and `cell_add` (required) parsing in
+/// `sugo_update_harness`.
+fn parse_cell_status(s: &str) -> Result<sugo_core::domain::cell::CellStatus, ErrorData> {
+    use sugo_core::domain::cell::CellStatus;
+    match s {
+        "active" => Ok(CellStatus::Active),
+        "draft" => Ok(CellStatus::Draft),
+        other => Err(ErrorData::invalid_params(
+            format!("unknown status '{}': must be 'active' or 'draft'", other),
+            Some(serde_json::json!({ "code": "invalid_arguments" })),
+        )),
     }
 }
 
@@ -562,7 +661,9 @@ fn build_inject_text(
             .collect();
         format!(
             "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を1回だけ呼んでください。\n呼んだ後は、次の Sugo メッセージ（inject）が実際に届くまで待機すること。ループ構造から「次も同じステップだ」と推測して、injectを待たずに次の作業へ進んではいけません。1 inject ＝ 1 ステップを厳守してください。\nrun_id: {}\n選択できるエッジ:\n{}",
-            prompt, run_id, edge_lines.join("\n")
+            prompt,
+            run_id,
+            edge_lines.join("\n")
         )
     }
 }
@@ -634,7 +735,8 @@ mod tests {
     fn server() -> SugoServer {
         let harness_repo = Arc::new(SqliteHarnessRepository::in_memory().expect("in-memory db"));
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory conn");
-        conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA).expect("schema");
+        conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA)
+            .expect("schema");
         let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(conn)));
         SugoServer::new(
             harness_repo,
@@ -775,9 +877,11 @@ mod tests {
         let p = payload(&result);
         assert_eq!(p["ok"], serde_json::json!(false));
         let issues = p["issues"].as_array().expect("issues array");
-        assert!(issues
-            .iter()
-            .any(|i| i["severity"] == serde_json::json!("error")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i["severity"] == serde_json::json!("error"))
+        );
     }
 
     #[tokio::test]
@@ -787,7 +891,9 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let result = srv
-            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(id),
+            }))
             .await
             .expect("status succeeds");
         let p = payload(&result);
@@ -801,7 +907,10 @@ mod tests {
         assert!(!cell.contains_key("prompt"), "prompt must not leak");
 
         assert!(p["edges"].is_array(), "edges is a top-level array");
-        assert!(p["draft_diff"].is_array(), "draft_diff is a top-level array");
+        assert!(
+            p["draft_diff"].is_array(),
+            "draft_diff is a top-level array"
+        );
     }
 
     #[tokio::test]
@@ -809,7 +918,10 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let result = srv
-            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .sugo_get_cell(Parameters(tools::GetCellArgs {
+                harness_id: id,
+                cell_id: "c1".into(),
+            }))
             .await
             .expect("get_cell succeeds");
         let p = payload(&result);
@@ -829,7 +941,10 @@ mod tests {
         def.cells[0].request_memo = "もっと丁寧に".into();
         let id = create_harness(&srv, "h", Some(def)).await;
         let result = srv
-            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "c1".into() }))
+            .sugo_get_cell(Parameters(tools::GetCellArgs {
+                harness_id: id,
+                cell_id: "c1".into(),
+            }))
             .await
             .expect("get_cell succeeds");
         let p = payload(&result);
@@ -841,7 +956,10 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let err = srv
-            .sugo_get_cell(Parameters(tools::GetCellArgs { harness_id: id, cell_id: "ghost".into() }))
+            .sugo_get_cell(Parameters(tools::GetCellArgs {
+                harness_id: id,
+                cell_id: "ghost".into(),
+            }))
             .await
             .expect_err("unknown cell_id fails");
         assert_eq!(error_code(&err), "not_found");
@@ -858,13 +976,22 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let result = srv
-            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(id),
+            }))
             .await
             .expect("status succeeds");
         let p = payload(&result);
         // Initially no runs, so running_runs should be an empty array
-        assert!(p["running_runs"].is_array(), "running_runs must be an array");
-        assert_eq!(p["running_runs"].as_array().unwrap().len(), 0, "no runs yet");
+        assert!(
+            p["running_runs"].is_array(),
+            "running_runs must be an array"
+        );
+        assert_eq!(
+            p["running_runs"].as_array().unwrap().len(),
+            0,
+            "no runs yet"
+        );
     }
 
     #[tokio::test]
@@ -879,10 +1006,25 @@ mod tests {
         let p = payload(&result);
         let harnesses = p["harnesses"].as_array().expect("harnesses array");
         assert_eq!(harnesses.len(), 1);
-        assert!(harnesses[0]["harness_id"].is_string(), "harness_id must be a string");
-        assert_eq!(harnesses[0]["name"], serde_json::json!("a"), "name must be 'a'");
-        assert_eq!(harnesses[0]["current_version"], serde_json::json!(1), "initial version_no is 1");
-        assert_eq!(harnesses[0]["has_draft"], serde_json::json!(false), "default board has no draft");
+        assert!(
+            harnesses[0]["harness_id"].is_string(),
+            "harness_id must be a string"
+        );
+        assert_eq!(
+            harnesses[0]["name"],
+            serde_json::json!("a"),
+            "name must be 'a'"
+        );
+        assert_eq!(
+            harnesses[0]["current_version"],
+            serde_json::json!(1),
+            "initial version_no is 1"
+        );
+        assert_eq!(
+            harnesses[0]["has_draft"],
+            serde_json::json!(false),
+            "default board has no draft"
+        );
     }
 
     #[tokio::test]
@@ -919,8 +1061,16 @@ mod tests {
             .expect("edit succeeds");
         let p = payload(&result);
         assert_eq!(p["harness_id"], serde_json::json!(id));
-        assert_eq!(p["new_version"], serde_json::json!(2), "first edit produces version_no 2");
-        assert_eq!(p["lock_version"], serde_json::json!(1), "first edit bumps lock_version to 1");
+        assert_eq!(
+            p["new_version"],
+            serde_json::json!(2),
+            "first edit produces version_no 2"
+        );
+        assert_eq!(
+            p["lock_version"],
+            serde_json::json!(1),
+            "first edit bumps lock_version to 1"
+        );
     }
 
     #[tokio::test]
@@ -929,7 +1079,10 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let err = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: "  ".into() }))
+            .sugo_start(Parameters(tools::StartArgs {
+                harness_id: id,
+                project_path: "  ".into(),
+            }))
             .await
             .expect_err("blank project_path must be rejected");
         assert_eq!(error_code(&err), "invalid_arguments");
@@ -943,7 +1096,10 @@ mod tests {
         let srv = server();
         let id = create_harness(&srv, "h", Some(valid_board())).await;
         let err = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id.clone(), project_path: "/abs/p".into() }))
+            .sugo_start(Parameters(tools::StartArgs {
+                harness_id: id.clone(),
+                project_path: "/abs/p".into(),
+            }))
             .await
             .expect_err("attach to absent Nipper must fail");
         assert_eq!(error_code(&err), "nipper_unreachable");
@@ -981,7 +1137,10 @@ mod tests {
         };
         let id = create_harness(&srv, "h", Some(draft_board)).await;
         let err = srv
-            .sugo_start(Parameters(tools::StartArgs { harness_id: id, project_path: "/abs/p".into() }))
+            .sugo_start(Parameters(tools::StartArgs {
+                harness_id: id,
+                project_path: "/abs/p".into(),
+            }))
             .await
             .expect_err("draft harness must be rejected");
         assert_eq!(error_code(&err), "draft_cells_exist");
@@ -996,7 +1155,10 @@ mod tests {
             srv.repo.as_ref(),
             srv.run_repo.as_ref(),
             srv.clock.as_ref(),
-            StartRunInput { harness_id: harness_id.into(), project_path: Some("/abs/p".into()) },
+            StartRunInput {
+                harness_id: harness_id.into(),
+                project_path: Some("/abs/p".into()),
+            },
         )
         .await
         .expect("seed start_run");
@@ -1064,17 +1226,42 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
+                Cell {
+                    id: "c1".into(),
+                    name: "first".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "last".into(),
+                    prompt: "done".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                    request_memo: "".into(),
+                },
             ],
-            edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "next".into(),
+                guard: None,
+            }],
         };
         let id = create_harness(&srv, "h", Some(two_cell)).await;
         let run_id = seed_run(&srv, &id).await;
         let now_ts = chrono::Utc::now().to_rfc3339();
-        let _ = srv.run_repo.set_inject_pending(&run_id, Some(&now_ts)).await;
+        let _ = srv
+            .run_repo
+            .set_inject_pending(&run_id, Some(&now_ts))
+            .await;
         let err = srv
-            .sugo_advance(Parameters(tools::AdvanceArgs { run_id, edge_label: "next".into() }))
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id,
+                edge_label: "next".into(),
+            }))
             .await
             .expect_err("inject_pending must block advance");
         assert_eq!(error_code(&err), "inject_pending");
@@ -1091,17 +1278,42 @@ mod tests {
             schema_version: 1,
             start: "c1".into(),
             cells: vec![
-                Cell { id: "c1".into(), name: "first".into(), prompt: "p".into(), status: CellStatus::Active, terminal: false, request_memo: "".into() },
-                Cell { id: "c2".into(), name: "last".into(), prompt: "done".into(), status: CellStatus::Active, terminal: true, request_memo: "".into() },
+                Cell {
+                    id: "c1".into(),
+                    name: "first".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "last".into(),
+                    prompt: "done".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                    request_memo: "".into(),
+                },
             ],
-            edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "next".into(),
+                guard: None,
+            }],
         };
         let id = create_harness(&srv, "h", Some(two_cell)).await;
         let run_id = seed_run(&srv, &id).await;
         let old_ts = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
-        let _ = srv.run_repo.set_inject_pending(&run_id, Some(&old_ts)).await;
+        let _ = srv
+            .run_repo
+            .set_inject_pending(&run_id, Some(&old_ts))
+            .await;
         let err = srv
-            .sugo_advance(Parameters(tools::AdvanceArgs { run_id: run_id.clone(), edge_label: "next".into() }))
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+            }))
             .await
             .expect_err("inject_timeout must reject");
         assert_eq!(error_code(&err), "inject_timeout");
@@ -1134,7 +1346,12 @@ mod tests {
                     request_memo: "".into(),
                 },
             ],
-            edges: vec![Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None }],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "next".into(),
+                guard: None,
+            }],
         };
         let id = create_harness(&srv, "h", Some(two_cell)).await;
         let run_id = seed_run(&srv, &id).await;
@@ -1151,7 +1368,10 @@ mod tests {
         assert_eq!(error_code(&err), "nipper_unreachable");
         // advance again on Done run → run_not_running (core rejects before inject)
         let err = srv
-            .sugo_advance(Parameters(tools::AdvanceArgs { run_id, edge_label: "next".into() }))
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id,
+                edge_label: "next".into(),
+            }))
             .await
             .expect_err("Done run must reject");
         assert_eq!(error_code(&err), "run_not_running");
@@ -1181,9 +1401,12 @@ mod tests {
                     request_memo: "".into(),
                 },
             ],
-            edges: vec![
-                Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None },
-            ],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "next".into(),
+                guard: None,
+            }],
         }
     }
 
@@ -1202,6 +1425,7 @@ mod tests {
                     status: Some("active".into()),
                     memo: None,
                 }],
+                cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
             }))
@@ -1214,7 +1438,9 @@ mod tests {
         assert_eq!(p["lock_version"].as_i64().unwrap(), 1);
 
         let st = srv
-            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(hid.clone()) }))
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(hid.clone()),
+            }))
             .await
             .unwrap();
         let st_p = payload(&st);
@@ -1235,6 +1461,7 @@ mod tests {
                 status: Some("active".into()),
                 memo: None,
             }],
+            cell_add: vec![],
             edge_add: vec![],
             edge_remove: vec![],
         }))
@@ -1270,6 +1497,7 @@ mod tests {
                     status: Some("unknown_status".into()),
                     memo: None,
                 }],
+                cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
             }))
@@ -1317,7 +1545,9 @@ mod tests {
         };
         let id = create_harness(&srv, "h", Some(board_with_memo)).await;
         let result = srv
-            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(id) }))
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(id),
+            }))
             .await
             .expect("status succeeds");
         let p = payload(&result);
@@ -1326,7 +1556,10 @@ mod tests {
             .iter()
             .find(|d| d["cell_id"] == serde_json::json!("c2"))
             .expect("c2 present in draft_diff");
-        assert_eq!(entry["memo"], serde_json::json!("もっと丁寧に書き直してほしい"));
+        assert_eq!(
+            entry["memo"],
+            serde_json::json!("もっと丁寧に書き直してほしい")
+        );
     }
 
     #[tokio::test]
@@ -1344,10 +1577,118 @@ mod tests {
                     status: None,
                     memo: Some("test memo".into()),
                 }],
+                cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
             }))
             .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn update_harness_cell_add_via_mcp_tool_succeeds() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(valid_board())).await;
+
+        let result = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![tools::CellAddArgs {
+                    id: "c2".into(),
+                    name: "second".into(),
+                    prompt: "do second".into(),
+                    status: "active".into(),
+                    terminal: true,
+                }],
+                edge_add: vec![tools::EdgeAddArgs {
+                    from: "c1".into(),
+                    to: "c2".into(),
+                    label: "next".into(),
+                    guard: None,
+                }],
+                edge_remove: vec![],
+            }))
+            .await
+            .expect("update with cell_add succeeds");
+
+        let p = payload(&result);
+        assert_eq!(p["new_version"].as_i64().unwrap(), 2);
+
+        let st = srv
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(hid.clone()),
+            }))
+            .await
+            .unwrap();
+        let st_p = payload(&st);
+        let cells = st_p["cells"].as_array().expect("cells array");
+        let new_cell = cells
+            .iter()
+            .find(|c| c["id"] == serde_json::json!("c2"))
+            .expect("c2 present in cells");
+        assert_eq!(new_cell["name"], serde_json::json!("second"));
+        assert_eq!(new_cell["status"], serde_json::json!("active"));
+        assert_eq!(new_cell["terminal"], serde_json::json!(true));
+
+        let edges = st_p["edges"].as_array().expect("edges array");
+        let new_edge = edges
+            .iter()
+            .find(|e| e["from"] == serde_json::json!("c1") && e["to"] == serde_json::json!("c2"))
+            .expect("c1->c2 edge present in edges");
+        assert_eq!(new_edge["label"], serde_json::json!("next"));
+    }
+
+    #[tokio::test]
+    async fn update_harness_cell_add_duplicate_id_returns_validation_failed() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(valid_board())).await;
+
+        let err = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![tools::CellAddArgs {
+                    id: "c1".into(),
+                    name: "dup".into(),
+                    prompt: "p".into(),
+                    status: "active".into(),
+                    terminal: false,
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await
+            .expect_err("duplicate cell id must be rejected");
+
+        assert_eq!(error_code(&err), "validation_failed");
+    }
+
+    #[tokio::test]
+    async fn update_harness_cell_add_unknown_status_returns_invalid_arguments() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(valid_board())).await;
+
+        let err = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![tools::CellAddArgs {
+                    id: "c2".into(),
+                    name: "second".into(),
+                    prompt: "p".into(),
+                    status: "unknown_status".into(),
+                    terminal: false,
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+            }))
+            .await
+            .expect_err("unknown status must be rejected");
+
+        assert_eq!(error_code(&err), "invalid_arguments");
     }
 }
