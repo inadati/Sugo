@@ -23,7 +23,7 @@ pub struct DeleteHarnessInput {
 /// Moves a harness to the trash (sets `deleted_at`), refusing if an active
 /// run exists.
 pub async fn delete_harness(
-    harness_repo: &dyn HarnessRepository,
+    repo: &dyn HarnessRepository,
     run_repo: &dyn RunRepository,
     clock: &dyn IdClock,
     input: DeleteHarnessInput,
@@ -47,7 +47,7 @@ pub async fn delete_harness(
         return Err(CoreError::ActiveRunExists);
     }
 
-    harness_repo.trash_harness(&input.harness_id, &now_iso).await
+    repo.trash_harness(&input.harness_id, &now_iso).await
 }
 
 #[cfg(test)]
@@ -119,6 +119,62 @@ mod tests {
             .await
             .unwrap();
         assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+    }
+
+    #[tokio::test]
+    async fn delete_blocked_at_299_seconds_before_boundary() {
+        let (repo, run_repo, clock, id) = seed().await;
+        // FakeIdClock's fixed instant is 2026-01-01T00:00:00+09:00; 299s before
+        // it is still inside the < 300s active window.
+        run_repo.create(&running_run(&id, "2025-12-31T23:55:01+09:00")).await.unwrap();
+        let err = delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::ActiveRunExists));
+    }
+
+    #[tokio::test]
+    async fn delete_allows_at_exactly_300_seconds() {
+        let (repo, run_repo, clock, id) = seed().await;
+        // Exactly 300s before "now": the window is a strict `<`, so 300s elapsed
+        // no longer counts as active.
+        run_repo.create(&running_run(&id, "2025-12-31T23:55:00+09:00")).await.unwrap();
+        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
+            .await
+            .unwrap();
+        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+    }
+
+    #[tokio::test]
+    async fn delete_allows_at_301_seconds_past_boundary() {
+        let (repo, run_repo, clock, id) = seed().await;
+        run_repo.create(&running_run(&id, "2025-12-31T23:54:59+09:00")).await.unwrap();
+        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
+            .await
+            .unwrap();
+        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+    }
+
+    #[tokio::test]
+    async fn delete_blocked_when_one_of_several_runs_is_active() {
+        // A stale Running run and a Done run coexist with a fresh Running run;
+        // the fresh one alone must be enough to block deletion.
+        let (repo, run_repo, clock, id) = seed().await;
+        let mut stale = running_run(&id, "2025-12-31T12:00:00+09:00");
+        stale.id = "r-stale".into();
+        run_repo.create(&stale).await.unwrap();
+        let mut done = running_run(&id, "2026-01-01T00:00:00+09:00");
+        done.id = "r-done".into();
+        done.status = RunStatus::Done;
+        run_repo.create(&done).await.unwrap();
+        let mut fresh = running_run(&id, "2026-01-01T00:00:00+09:00");
+        fresh.id = "r-fresh".into();
+        run_repo.create(&fresh).await.unwrap();
+
+        let err = delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::ActiveRunExists));
     }
 
     #[tokio::test]

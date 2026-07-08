@@ -511,7 +511,10 @@ impl SugoServer {
         referenced by id in this same call's edge_add. \
         edge_add: [{from, to, label, guard?}] — edges to add. \
         edge_remove: [{from, to, label}] — edges to remove (missing edges silently ignored). \
-        All four arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
+        cell_remove: [cell_id, ...] — cell ids to remove. The board's start cell cannot be removed \
+        (rejected with a validation_failed error carrying a cannot_remove_start_cell issue); removing \
+        a cell also removes any edge connected to it; a missing cell id is silently ignored. \
+        All five arrays default to empty. Returns { harness_id, new_version, lock_version }.")]
     async fn sugo_update_harness(
         &self,
         Parameters(args): Parameters<tools::UpdateArgs>,

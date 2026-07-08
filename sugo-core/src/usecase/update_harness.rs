@@ -738,6 +738,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_removes_multiple_cells_in_one_call() {
+        let (repo, clock, id) = seed().await;
+        update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![CellAdd {
+                    id: "c3".into(),
+                    name: "third".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                }],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["c2".into(), "c3".into()],
+            },
+        )
+        .await
+        .unwrap();
+        let (_, v) = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(v.definition.cells.len(), 1, "both c2 and c3 must be removed");
+        assert_eq!(v.definition.cells[0].id, "c1");
+        assert!(v.definition.edges.is_empty(), "c1->c2 edge must be cascaded away");
+    }
+
+    #[tokio::test]
     async fn update_cannot_remove_start_cell_is_validation_error() {
         let (repo, clock, id) = seed().await;
         let err = update_harness(
