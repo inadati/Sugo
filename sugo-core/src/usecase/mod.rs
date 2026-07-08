@@ -10,6 +10,7 @@
 
 pub mod advance_run;
 pub mod create_harness;
+pub mod delete_harness;
 pub mod edit_cell;
 pub mod get_status;
 pub mod lease;

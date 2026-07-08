@@ -30,6 +30,10 @@ pub enum CoreError {
     /// `advance_run` was called on a run that is not in Running state.
     #[error("run is not running")]
     RunNotRunning,
+    /// `delete_harness` was called while a Running run (heartbeated/updated
+    /// within the active window) exists for the harness.
+    #[error("harness has an active run")]
+    ActiveRunExists,
     /// A persistence-layer failure surfaced from an adapter.
     #[error("storage error: {0}")]
     Storage(String),
