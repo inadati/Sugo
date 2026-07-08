@@ -21,6 +21,7 @@ fn code_for(e: &CoreError) -> &'static str {
         CoreError::Storage(_) => "storage_error",
         CoreError::DraftCellsExist => "draft_cells_exist",
         CoreError::RunNotRunning => "run_not_running",
+        CoreError::ActiveRunExists => "active_run",
     }
 }
 
@@ -108,6 +109,12 @@ mod tests {
     fn maps_run_not_running_code() {
         let e = to_tool_error(CoreError::RunNotRunning);
         assert_eq!(code_of(&e), "run_not_running");
+    }
+
+    #[test]
+    fn maps_active_run_exists_code() {
+        let e = to_tool_error(CoreError::ActiveRunExists);
+        assert_eq!(code_of(&e), "active_run");
     }
 
     #[test]

@@ -46,6 +46,13 @@ pub struct SetDescriptionArgs {
     pub description: Option<String>,
 }
 
+/// Arguments for `sugo_delete_harness`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteHarnessArgs {
+    /// Target harness id.
+    pub harness_id: String,
+}
+
 /// Arguments for `sugo_status`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StatusArgs {
@@ -180,6 +187,13 @@ pub struct UpdateArgs {
     /// Edges to remove (matched by from+to+label); defaults to empty.
     #[serde(default)]
     pub edge_remove: Vec<EdgeKeyArgs>,
+    /// Cell ids to remove; defaults to empty. The board's start cell cannot be
+    /// removed (rejected with a validation_failed error carrying a
+    /// cannot_remove_start_cell issue). Removing a cell also removes any edge
+    /// connected to it. A missing cell id is silently ignored (idempotent),
+    /// matching edge_remove's behavior.
+    #[serde(default)]
+    pub cell_remove: Vec<String>,
 }
 
 #[cfg(test)]

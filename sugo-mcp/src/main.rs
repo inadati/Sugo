@@ -573,6 +573,8 @@ impl SugoServer {
             })
             .collect();
 
+        let cell_remove = args.cell_remove;
+
         let out = update_harness(
             self.repo.as_ref(),
             self.clock.as_ref(),
@@ -583,6 +585,7 @@ impl SugoServer {
                 cell_add,
                 edge_add,
                 edge_remove,
+                cell_remove,
             },
         )
         .await
@@ -611,6 +614,38 @@ impl SugoServer {
             .set_description(&args.harness_id, args.description.as_deref())
             .await
             .map_err(error::to_tool_error)?;
+        let payload = serde_json::json!({ "ok": true });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Move a harness to the trash (soft delete).
+    #[tool(
+        description = "Move a harness to the trash (soft delete; deleted_at is set). \
+        Rejected with active_run if the harness has a Running run whose heartbeat/updated_at \
+        is within the last 300s. Trashed harnesses are restorable from the Sugo GUI's trash \
+        view; this tool does not expose restore or permanent purge. Returns { ok: true }. \
+        Deleting a harness is a hard-to-reverse decision from the agent's perspective — confirm \
+        with the user before calling (see the sugo-harness-delete skill)."
+    )]
+    async fn sugo_delete_harness(
+        &self,
+        Parameters(args): Parameters<tools::DeleteHarnessArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::delete_harness::{DeleteHarnessInput, delete_harness};
+
+        delete_harness(
+            self.repo.as_ref(),
+            self.run_repo.as_ref(),
+            self.clock.as_ref(),
+            DeleteHarnessInput {
+                harness_id: args.harness_id,
+            },
+        )
+        .await
+        .map_err(error::to_tool_error)?;
+
         let payload = serde_json::json!({ "ok": true });
         Ok(CallToolResult::success(vec![Content::text(
             payload.to_string(),
@@ -674,7 +709,8 @@ impl ServerHandler for SugoServer {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(
             "Sugo harness MCP server. Tools: sugo_create_harness, sugo_status, \
-             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_update_harness. \
+             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_update_harness, \
+             sugo_delete_harness. \
              Editing a cell always produces a new immutable board version guarded by an optimistic lock. \
              sugo_start begins a run and injects the first cell's prompt into the Nipper message queue; \
              sugo_advance follows an edge and injects the next cell's prompt into Nipper. \
@@ -1428,6 +1464,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await
             .expect("update succeeds");
@@ -1464,6 +1501,7 @@ mod tests {
             cell_add: vec![],
             edge_add: vec![],
             edge_remove: vec![],
+            cell_remove: vec![],
         }))
         .await
         .expect("update succeeds");
@@ -1500,6 +1538,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await
             .expect_err("unknown status must be rejected");
@@ -1580,6 +1619,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await;
         assert!(result.is_ok());
@@ -1609,6 +1649,7 @@ mod tests {
                     guard: None,
                 }],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await
             .expect("update with cell_add succeeds");
@@ -1659,6 +1700,7 @@ mod tests {
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await
             .expect_err("duplicate cell id must be rejected");
@@ -1685,10 +1727,110 @@ mod tests {
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             }))
             .await
             .expect_err("unknown status must be rejected");
 
         assert_eq!(error_code(&err), "invalid_arguments");
+    }
+
+    #[tokio::test]
+    async fn sugo_delete_harness_moves_to_trash() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        let result = srv
+            .sugo_delete_harness(Parameters(tools::DeleteHarnessArgs {
+                harness_id: id.clone(),
+            }))
+            .await
+            .expect("delete succeeds");
+        let p = payload(&result);
+        assert_eq!(p["ok"], serde_json::json!(true));
+
+        let trash = srv.repo.list_trash().await.unwrap();
+        assert!(trash.iter().any(|(hid, _, _)| hid == &id));
+
+        let st = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: None }))
+            .await
+            .unwrap();
+        let harnesses = payload(&st)["harnesses"].as_array().unwrap().clone();
+        assert!(!harnesses.iter().any(|h| h["harness_id"] == serde_json::json!(id)));
+    }
+
+    #[tokio::test]
+    async fn sugo_delete_harness_blocked_by_active_run() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(valid_board())).await;
+        // seed_run uses RealIdClock's wall-clock time, so the run is fresh (active).
+        seed_run(&srv, &id).await;
+        let err = srv
+            .sugo_delete_harness(Parameters(tools::DeleteHarnessArgs {
+                harness_id: id,
+            }))
+            .await
+            .expect_err("active run must block delete");
+        assert_eq!(error_code(&err), "active_run");
+    }
+
+    #[tokio::test]
+    async fn sugo_delete_harness_missing_harness_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_delete_harness(Parameters(tools::DeleteHarnessArgs {
+                harness_id: "ghost".into(),
+            }))
+            .await
+            .expect_err("missing harness must fail");
+        assert_eq!(error_code(&err), "not_found");
+    }
+
+    #[tokio::test]
+    async fn update_harness_cell_remove_via_mcp_tool_cascades_edge() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(draft_board())).await;
+
+        let result = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["c2".into()],
+            }))
+            .await
+            .expect("update with cell_remove succeeds");
+        assert_eq!(payload(&result)["new_version"].as_i64().unwrap(), 2);
+
+        let st = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(hid) }))
+            .await
+            .unwrap();
+        let st_p = payload(&st);
+        assert!(!st_p["cells"].as_array().unwrap().iter().any(|c| c["id"] == serde_json::json!("c2")));
+        assert!(st_p["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_harness_cell_remove_start_cell_returns_validation_failed() {
+        let srv = server();
+        let hid = create_harness(&srv, "h", Some(valid_board())).await;
+
+        let err = srv
+            .sugo_update_harness(Parameters(tools::UpdateArgs {
+                harness_id: hid,
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["c1".into()],
+            }))
+            .await
+            .expect_err("removing start cell must be rejected");
+        assert_eq!(error_code(&err), "validation_failed");
     }
 }
