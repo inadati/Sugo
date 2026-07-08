@@ -42,6 +42,8 @@ pub enum IssueCode {
     NoTerminal,
     /// At least one cell is still in draft status (advisory warning).
     HasDraft,
+    /// `cell_remove` targeted the board's `start` cell, which cannot be removed.
+    CannotRemoveStartCell,
 }
 
 /// A single problem found while validating a board definition.

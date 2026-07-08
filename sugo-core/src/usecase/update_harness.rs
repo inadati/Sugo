@@ -37,6 +37,7 @@ pub struct UpdateHarnessInput {
     pub cell_add: Vec<CellAdd>,
     pub edge_add: Vec<Edge>,
     pub edge_remove: Vec<EdgeKey>,
+    pub cell_remove: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -100,6 +101,20 @@ pub async fn update_harness(
             request_memo: "".into(),
         });
     }
+
+    for cell_id in &input.cell_remove {
+        if &def.start == cell_id {
+            return Err(CoreError::Validation(vec![ValidationIssue {
+                severity: Severity::Error,
+                code: IssueCode::CannotRemoveStartCell,
+                message: format!("cannot remove start cell '{}'", cell_id),
+                cell_id: Some(cell_id.clone()),
+            }]));
+        }
+    }
+    def.cells.retain(|c| !input.cell_remove.contains(&c.id));
+    def.edges
+        .retain(|e| !input.cell_remove.contains(&e.from) && !input.cell_remove.contains(&e.to));
 
     for key in &input.edge_remove {
         def.edges
@@ -210,6 +225,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -241,6 +257,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -269,6 +286,7 @@ mod tests {
                     guard: None,
                 }],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -299,6 +317,7 @@ mod tests {
                     to: "c2".into(),
                     label: "next".into(),
                 }],
+                cell_remove: vec![],
             },
         )
         .await
@@ -324,6 +343,7 @@ mod tests {
                     to: "ghost2".into(),
                     label: "nope".into(),
                 }],
+                cell_remove: vec![],
             },
         )
         .await;
@@ -353,6 +373,7 @@ mod tests {
                     guard: None,
                 }],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -380,6 +401,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -400,6 +422,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -447,6 +470,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -482,6 +506,7 @@ mod tests {
                 cell_add: vec![],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -525,6 +550,7 @@ mod tests {
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -567,6 +593,7 @@ mod tests {
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -599,6 +626,7 @@ mod tests {
                     guard: None,
                 }],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -632,6 +660,7 @@ mod tests {
                 }],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -672,6 +701,7 @@ mod tests {
                 ],
                 edge_add: vec![],
                 edge_remove: vec![],
+                cell_remove: vec![],
             },
         )
         .await
@@ -682,5 +712,74 @@ mod tests {
             }
             other => panic!("expected Validation error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn update_removes_cell_and_cascades_connected_edges() {
+        let (repo, clock, id) = seed().await;
+        update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["c2".into()],
+            },
+        )
+        .await
+        .unwrap();
+        let (_, v) = repo.get(&id).await.unwrap().unwrap();
+        assert!(!v.definition.cells.iter().any(|c| c.id == "c2"));
+        assert!(v.definition.edges.is_empty(), "edge c1->c2 must be cascaded away");
+    }
+
+    #[tokio::test]
+    async fn update_cannot_remove_start_cell_is_validation_error() {
+        let (repo, clock, id) = seed().await;
+        let err = update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["c1".into()],
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            CoreError::Validation(issues) => {
+                assert!(issues.iter().any(|i| i.code == IssueCode::CannotRemoveStartCell));
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_missing_cell_remove_id_is_silently_ignored() {
+        let (repo, clock, id) = seed().await;
+        let result = update_harness(
+            &repo,
+            &clock,
+            UpdateHarnessInput {
+                harness_id: id.clone(),
+                expected_lock_version: 0,
+                cell_changes: vec![],
+                cell_add: vec![],
+                edge_add: vec![],
+                edge_remove: vec![],
+                cell_remove: vec!["ghost".into()],
+            },
+        )
+        .await;
+        assert!(result.is_ok());
     }
 }
