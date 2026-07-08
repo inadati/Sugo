@@ -1,10 +1,10 @@
 ---
 name: sugo-cell-author
 description: |
-  Use this skill when writing, editing, or adding a cell prompt in a Sugo harness.
+  Use this skill when writing, editing, adding, or removing a cell in a Sugo harness.
   Apply these rules whenever you call sugo_edit_cell, or sugo_update_harness with
-  cell_changes and/or cell_add (adding a brand-new cell to an existing harness).
-version: 0.2.0
+  cell_changes, cell_add, and/or cell_remove.
+version: 0.3.0
 tools: []
 ---
 
@@ -30,7 +30,7 @@ tools: []
 以下に該当する場合は実施前に必ずユーザーに確認を求める:
 
 - エッジの追加・削除（フロー構造の変更）
-- セルの分割・統合（セル数の増減）。`sugo_update_harness` の `cell_add` で既存ハーネスに新規セルを追加する操作もこれに含まれる（新規セルの `prompt`/`name`/`status`/`terminal` を丸ごと著作するため、既存セルへの部分的なプロンプト修正より判断の重みが大きい）
+- セルの分割・統合（セル数の増減）。`sugo_update_harness` の `cell_add` で既存ハーネスに新規セルを追加する操作もこれに含まれる（新規セルの `prompt`/`name`/`status`/`terminal` を丸ごと著作するため、既存セルへの部分的なプロンプト修正より判断の重みが大きい）。`cell_remove` で既存セルを削除する操作も同様（接続するedgeも道連れで消え、ハーネスの構造そのものが変わるため）
 - セルの役割の大幅な変更（プロンプトの方向性が変わる場合）
 - `start` セルや `terminal` セルの変更
 - 複数セルにまたがる一括変更
@@ -53,3 +53,4 @@ tools: []
 | 複数セル・エッジを同時変更 | `sugo_update_harness` |
 | 既存ハーネスへの新規セル追加（`id`/`name`/`prompt`/`status`/`terminal` を著作） | `sugo_update_harness`（`cell_add`）。手順3のユーザー確認を経てから実施し、同一呼び出しの `edge_add` で新規セルへ接続してよい |
 | セルの現行プロンプト・memoの確認 | `sugo_get_cell(harness_id, cell_id)` |
+| 既存セルの削除（接続edgeも道連れで削除） | `sugo_update_harness`（`cell_remove`）。手順3のユーザー確認を経てから実施する |
