@@ -75,7 +75,7 @@ async fn list_excludes_trashed_harnesses() {
 - [ ] **Step 2: テストが失敗することを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-infra list_excludes_trashed 2>&1 | tail -5
 ```
 
@@ -153,7 +153,7 @@ Expected: FAIL（`deleted_at` カラムがない、または `list()` がフィ�
 - [ ] **Step 6: テストが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-infra 2>&1 | tail -10
 ```
 
@@ -299,7 +299,7 @@ git commit -m "feat(infra): harnesses.deleted_at マイグレーション + list
 - [ ] **Step 5: コンパイルエラーがないことを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo check -p sugo-core 2>&1 | tail -10
 ```
 
@@ -394,7 +394,7 @@ git commit -m "feat(core): HarnessRepository にゴミ箱トレイトメソッ�
 - [ ] **Step 2: テストが失敗することを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-infra trash_and_restore 2>&1 | tail -5
 ```
 
@@ -501,7 +501,7 @@ Expected: FAIL（メソッド未実装）
 - [ ] **Step 4: テストが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-infra 2>&1 | tail -10
 ```
 
@@ -616,7 +616,7 @@ pub struct TrashItemDto {
 - [ ] **Step 3: テストが失敗することを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-gui 2>&1 | tail -10
 ```
 
@@ -805,7 +805,7 @@ pub fn run() {
 - [ ] **Step 7: テストが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo test -p sugo-gui 2>&1 | tail -10
 ```
 
@@ -814,7 +814,7 @@ Expected: すべて PASS
 - [ ] **Step 8: ビルドが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo
+cd $(git rev-parse --show-toplevel)
 cargo build -p sugo-gui 2>&1 | tail -10
 ```
 
@@ -844,7 +844,7 @@ git commit -m "feat(gui): ゴミ箱 Tauri コマンド追加 + 起動時自動�
 - [ ] **Step 1: @heroicons/vue をインストール**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm install @heroicons/vue
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm install @heroicons/vue
 ```
 
 Expected: `added N packages` のような出力、`package.json` の dependencies に `@heroicons/vue` が追加される
@@ -909,7 +909,7 @@ export const router = createRouter({
 （ShellLayout はまだ未作成でよい。テストは HarnessList を直接 mount するため影響なし）
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm test 2>&1 | tail -15
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm test 2>&1 | tail -15
 ```
 
 Expected: PASS（既存テストはそのまま通る）
@@ -938,7 +938,7 @@ git commit -m "feat(gui): @heroicons/vue インストール + ルーター Shell
 - [ ] **Step 1: `src/layouts/` ディレクトリ作成確認**
 
 ```bash
-ls /Users/ittan/Asweed/sandbox/Sugo/sugo-gui/src/
+ls $(git rev-parse --show-toplevel)/sugo-gui/src/
 ```
 
 `layouts/` ディレクトリがなければ次のステップで `ShellLayout.vue` を作成すれば自動作成される（Write ツールが作成する）
@@ -1024,7 +1024,7 @@ onUnmounted(() => {
 - [ ] **Step 4: TypeScript エラーがないことを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm run build 2>&1 | tail -15
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm run build 2>&1 | tail -15
 ```
 
 Expected: ビルド成功
@@ -1102,7 +1102,7 @@ describe("HarnessList – trash confirmation", () => {
 - [ ] **Step 2: テストが失敗することを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm test 2>&1 | tail -15
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm test 2>&1 | tail -15
 ```
 
 Expected: FAIL（`data-testid` 属性が未実装）
@@ -1235,7 +1235,7 @@ onUnmounted(() => {
 - [ ] **Step 4: テストが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm test 2>&1 | tail -15
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm test 2>&1 | tail -15
 ```
 
 Expected: すべて PASS
@@ -1385,7 +1385,7 @@ onUnmounted(() => {
 - [ ] **Step 2: TypeScript エラーがないことを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm run build 2>&1 | tail -10
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm run build 2>&1 | tail -10
 ```
 
 Expected: ビルド成功
@@ -1393,7 +1393,7 @@ Expected: ビルド成功
 - [ ] **Step 3: テストが通ることを確認**
 
 ```bash
-cd /Users/ittan/Asweed/sandbox/Sugo/sugo-gui && npm test 2>&1 | tail -10
+cd $(git rev-parse --show-toplevel)/sugo-gui && npm test 2>&1 | tail -10
 ```
 
 Expected: すべて PASS
