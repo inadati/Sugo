@@ -31,16 +31,15 @@ Tauri アプリとしてのセキュリティ設定（CSP・capabilities）、�
 
 ### 項目1: 個人パスの置換確認
 
-```
-$ git show bc12994^:docs/superpowers/plans/2026-06-30-sidebar-trash.md | grep -c "/Users/ittan/Asweed/sandbox/Sugo"
-16
+コミット `bc12994` の親コミット時点（置換前）で、`docs/superpowers/plans/2026-06-30-sidebar-trash.md` 内に
+存在していた個人の絶対パス（OSユーザー名を含むホームディレクトリ配下のパス）の出現件数を、該当パス文字列を
+検索パターンとした `grep -c` で確認した。
 
-$ grep -c "/Users/ittan" docs/superpowers/plans/2026-06-30-sidebar-trash.md   # 現在のワーキングツリー
-0
-```
+- 置換前（`git show bc12994^:docs/superpowers/plans/2026-06-30-sidebar-trash.md` に対して該当パス文字列で `grep -c` を実行）: 16件
+- 置換後（現在のワーキングツリーに対して同パス文字列で `grep -c` を実行）: 0件
 
-置換前（コミット `bc12994` の親コミット時点）は絶対パス `/Users/ittan/Asweed/sandbox/Sugo` が16件存在し、
-現在のワーキングツリー（コミット `bc12994` 適用後）では `/Users/ittan` を含む行が0件であることを確認した。
+なお、検索対象とした個人パス文字列そのものは、これ以上リポジトリ内に literal に記載しないことで、
+本ドキュメント自体が新たな個人情報漏洩源とならないよう配慮している。
 
 ### 項目7: テスト・ビルドの再実行結果
 
@@ -72,6 +71,19 @@ $ git show HEAD:sugo-gui/.npmrc
 ```
 
 秘匿情報（`_authToken` 等）は含まれていないことを確認した。
+
+### 項目9: LICENSEの存在・内容確認
+
+```
+$ test -f LICENSE && head -1 LICENSE
+MIT License
+
+$ grep -n '"license"' .claude-plugin/marketplace.json
+19:      "license": "MIT",
+```
+
+LICENSEファイルが存在し先頭行が `MIT License` であること、および `.claude-plugin/marketplace.json` の
+`"license"` フィールドが `"MIT"`（19行目）であることを実際に再実行して確認した。両者は整合している。
 
 ## 4. 残存事項（次のアクション）
 
