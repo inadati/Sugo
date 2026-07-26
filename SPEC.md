@@ -32,7 +32,8 @@ Nipper の `chot-harness`（ハードコードされた参照FSMハーネス）�
 ### 決定3: Nipper 連携
 - Nipper が公開するローカル HTTP の inject API 経由で指示を渡す
 - バッファし、エージェントがアイドルになったタイミングで注入する
-- ローカル限定のためトークン認証は不要
+- 共有トークン認証あり（`X-Nipper-Inject-Token` ヘッダー）。ローカル限定の緩和策（Origin/Sec-Fetch-Site拒否）だけでは同一マシン上の別プロセスからの直接アクセスを防げないため（2026-07-24 セキュリティ監査）
+- トークンは Nipper が起動時に生成し `~/.nipper/inject-token`（devビルドは `~/.nipper-dev/inject-token`）に書き込む。Sugo側は呼び出しのたびに同ファイルを読み直してヘッダーに付与する
 
 ### 決定4: ルーティング鍵
 - session-id は再開（resume）でフォークするため不安定
