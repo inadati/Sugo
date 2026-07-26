@@ -59,6 +59,10 @@ pub fn nipper_outcome_error(outcome: NipperOutcome) -> Option<ErrorData> {
             "could not read Nipper inject token file — is Nipper running?",
             "token_unavailable",
         ),
+        NipperOutcome::TokenPermissionDenied => (
+            "permission denied reading Nipper inject token file — check file permissions",
+            "token_permission_denied",
+        ),
     };
     Some(ErrorData::internal_error(msg.to_string(), Some(json!({ "code": code }))))
 }
@@ -167,6 +171,12 @@ mod tests {
     fn nipper_token_unavailable_maps_code() {
         let e = nipper_outcome_error(NipperOutcome::TokenUnavailable).unwrap();
         assert_eq!(code_of(&e), "token_unavailable");
+    }
+
+    #[test]
+    fn nipper_token_permission_denied_maps_code() {
+        let e = nipper_outcome_error(NipperOutcome::TokenPermissionDenied).unwrap();
+        assert_eq!(code_of(&e), "token_permission_denied");
     }
 
     #[test]

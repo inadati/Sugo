@@ -1,7 +1,9 @@
 //! Outbound client for the Nipper local inject API (127.0.0.1:8771).
 //!
-//! All calls are localhost HTTP. Responses are classified into a small result
-//! enum the MCP handlers map to tool errors.
+//! All calls are localhost HTTP, authenticated with a shared secret token
+//! (`X-Nipper-Inject-Token`) that Nipper writes to a local token file at
+//! startup; Sugo re-reads that file on every call. Responses are classified
+//! into a small result enum the MCP handlers map to tool errors.
 
 use serde_json::json;
 
@@ -16,6 +18,7 @@ pub enum NipperOutcome {
     Unreachable,
     Unauthorized,
     TokenUnavailable,
+    TokenPermissionDenied,
 }
 
 /// Map an HTTP status to an outcome (200 => Ok, 404 => NoSession, 401 => Unauthorized, else BadRequest).
@@ -29,16 +32,20 @@ fn classify(status: u16) -> NipperOutcome {
 }
 
 /// Read the inject token file, trimming any trailing newline.
-/// Returns Err if the file cannot be read (e.g. Nipper not running).
-fn read_token(path: &str) -> Result<String, ()> {
-    std::fs::read_to_string(path)
+/// Returns the io::ErrorKind on failure (e.g. NotFound if Nipper isn't
+/// running, PermissionDenied if the file exists but can't be read).
+async fn read_token(path: &str) -> Result<String, std::io::ErrorKind> {
+    tokio::fs::read_to_string(path)
+        .await
         .map(|s| s.trim().to_string())
-        .map_err(|_| ())
+        .map_err(|e| e.kind())
 }
 
 async fn post(base: &str, path: &str, token_path: &str, body: serde_json::Value) -> NipperOutcome {
-    let Ok(token) = read_token(token_path) else {
-        return NipperOutcome::TokenUnavailable;
+    let token = match read_token(token_path).await {
+        Ok(t) => t,
+        Err(std::io::ErrorKind::PermissionDenied) => return NipperOutcome::TokenPermissionDenied,
+        Err(_) => return NipperOutcome::TokenUnavailable,
     };
     let client = reqwest::Client::new();
     match client
@@ -178,15 +185,46 @@ mod tests {
         assert_eq!(classify(400), NipperOutcome::BadRequest);
     }
 
-    #[test]
-    fn read_token_reads_trimmed_contents() {
+    #[tokio::test]
+    async fn read_token_reads_trimmed_contents() {
         let path = write_temp_token("abc123\n");
-        assert_eq!(read_token(&path), Ok("abc123".to_string()));
+        assert_eq!(read_token(&path).await, Ok("abc123".to_string()));
     }
 
-    #[test]
-    fn read_token_missing_file_is_err() {
+    #[tokio::test]
+    async fn read_token_missing_file_is_not_found() {
         let path = std::env::temp_dir().join(format!("sugo-test-missing-{}", uuid::Uuid::new_v4()));
-        assert_eq!(read_token(path.to_str().unwrap()), Err(()));
+        assert_eq!(read_token(path.to_str().unwrap()).await, Err(std::io::ErrorKind::NotFound));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_token_permission_denied_is_distinguished() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("sugo-test-noperm-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "tok").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = read_token(path.to_str().unwrap()).await;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(result, Err(std::io::ErrorKind::PermissionDenied));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inject_permission_denied_token_is_token_permission_denied_without_network_call() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("sugo-test-noperm-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "tok").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = inject("http://127.0.0.1:1", path.to_str().unwrap(), "/p", "hi").await;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(result, NipperOutcome::TokenPermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn inject_400_is_bad_request() {
+        let base = spawn_mock(StatusCode::BAD_REQUEST).await;
+        let token_path = write_temp_token("tok123");
+        assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::BadRequest);
     }
 }
