@@ -36,26 +36,41 @@ fn read_token(path: &str) -> Result<String, ()> {
         .map_err(|_| ())
 }
 
-async fn post(base: &str, path: &str, body: serde_json::Value) -> NipperOutcome {
+async fn post(base: &str, path: &str, token_path: &str, body: serde_json::Value) -> NipperOutcome {
+    let Ok(token) = read_token(token_path) else {
+        return NipperOutcome::TokenUnavailable;
+    };
     let client = reqwest::Client::new();
-    match client.post(format!("{base}{path}")).json(&body).send().await {
+    match client
+        .post(format!("{base}{path}"))
+        .header("X-Nipper-Inject-Token", token)
+        .json(&body)
+        .send()
+        .await
+    {
         Ok(resp) => classify(resp.status().as_u16()),
         Err(_) => NipperOutcome::Unreachable,
     }
 }
 
-pub async fn attach(base: &str, project_path: &str, run_id: &str, callback_url: &str) -> NipperOutcome {
-    post(base, "/attach", json!({
+pub async fn attach(
+    base: &str,
+    token_path: &str,
+    project_path: &str,
+    run_id: &str,
+    callback_url: &str,
+) -> NipperOutcome {
+    post(base, "/attach", token_path, json!({
         "project_path": project_path, "run_id": run_id, "sugo_callback_url": callback_url
     })).await
 }
 
-pub async fn inject(base: &str, project_path: &str, text: &str) -> NipperOutcome {
-    post(base, "/inject", json!({ "project_path": project_path, "text": text })).await
+pub async fn inject(base: &str, token_path: &str, project_path: &str, text: &str) -> NipperOutcome {
+    post(base, "/inject", token_path, json!({ "project_path": project_path, "text": text })).await
 }
 
-pub async fn detach(base: &str, project_path: &str) -> NipperOutcome {
-    post(base, "/detach", json!({ "project_path": project_path })).await
+pub async fn detach(base: &str, token_path: &str, project_path: &str) -> NipperOutcome {
+    post(base, "/detach", token_path, json!({ "project_path": project_path })).await
 }
 
 #[cfg(test)]
@@ -84,22 +99,75 @@ mod tests {
     #[tokio::test]
     async fn inject_200_is_ok() {
         let base = spawn_mock(StatusCode::OK).await;
-        assert_eq!(inject(&base, "/p", "hi").await, NipperOutcome::Ok);
+        let token_path = write_temp_token("tok123");
+        assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::Ok);
     }
 
     #[tokio::test]
     async fn inject_404_is_no_session() {
         let base = spawn_mock(StatusCode::NOT_FOUND).await;
-        assert_eq!(inject(&base, "/p", "hi").await, NipperOutcome::NoSession);
+        let token_path = write_temp_token("tok123");
+        assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::NoSession);
+    }
+
+    #[tokio::test]
+    async fn inject_401_is_unauthorized() {
+        let base = spawn_mock(StatusCode::UNAUTHORIZED).await;
+        let token_path = write_temp_token("tok123");
+        assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::Unauthorized);
     }
 
     #[tokio::test]
     async fn unreachable_when_no_server() {
         // Port 1 is reserved/unbound; connection fails.
+        let token_path = write_temp_token("tok123");
         assert_eq!(
-            inject("http://127.0.0.1:1", "/p", "hi").await,
+            inject("http://127.0.0.1:1", &token_path, "/p", "hi").await,
             NipperOutcome::Unreachable
         );
+    }
+
+    #[tokio::test]
+    async fn missing_token_file_is_token_unavailable_without_network_call() {
+        // Port 1 is reserved/unbound; if a request were attempted it would return
+        // Unreachable, not TokenUnavailable — this proves the token read happens
+        // before any network call is made.
+        let missing_path = std::env::temp_dir().join(format!("sugo-test-missing-{}", uuid::Uuid::new_v4()));
+        assert_eq!(
+            inject("http://127.0.0.1:1", missing_path.to_str().unwrap(), "/p", "hi").await,
+            NipperOutcome::TokenUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn inject_sends_token_header() {
+        use std::sync::{Arc, Mutex};
+        use axum::http::HeaderMap;
+
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let captured_clone = captured.clone();
+        let app = Router::new().route(
+            "/inject",
+            post(move |headers: HeaderMap, Json(_): Json<Value>| {
+                let captured = captured_clone.clone();
+                async move {
+                    let token = headers
+                        .get("x-nipper-inject-token")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    *captured.lock().unwrap() = token;
+                    (StatusCode::OK, Json(json!({"status":"buffered"})))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let base = format!("http://{addr}");
+        let token_path = write_temp_token("tok123");
+
+        assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::Ok);
+        assert_eq!(captured.lock().unwrap().clone(), Some("tok123".to_string()));
     }
 
     #[test]

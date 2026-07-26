@@ -18,6 +18,7 @@ pub fn spawn(
     project_path: String,
     run_repo: Arc<SqliteRunRepository>,
     nipper_base: String,
+    token_path: String,
     since_iso: String,
 ) {
     tokio::spawn(async move {
@@ -41,7 +42,7 @@ pub fn spawn(
                  このセルのタスクが完了したら `sugo_advance` を呼び出して次のセルに進んでください。\n\
                  run_id: `{run_id}`"
             );
-            let _ = crate::nipper_client::inject(&nipper_base, &project_path, &msg).await;
+            let _ = crate::nipper_client::inject(&nipper_base, &token_path, &project_path, &msg).await;
             reminders_sent += 1;
         }
     });

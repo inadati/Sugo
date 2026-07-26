@@ -27,6 +27,7 @@ pub struct CallbackState {
     pub run_repo: Arc<SqliteRunRepository>,
     pub clock: Arc<RealIdClock>,
     pub nipper_base: String,
+    pub token_path: String,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +73,7 @@ async fn handle_inject_ack(State(st): State<CallbackState>, Json(req): Json<Inje
             project_path,
             st.run_repo.clone(),
             st.nipper_base.clone(),
+            st.token_path.clone(),
             since_iso,
         );
     }
@@ -144,6 +146,7 @@ mod tests {
             run_repo: Arc::new(SqliteRunRepository::new(Mutex::new(conn))),
             clock: Arc::new(RealIdClock),
             nipper_base: "http://127.0.0.1:8771".into(),
+            token_path: "/tmp/sugo-test-unused-token-path".into(),
         }
     }
 

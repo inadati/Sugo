@@ -31,6 +31,8 @@ struct SugoServer {
     callback_url: String,
     /// Nipper inject API base URL.
     nipper_base: String,
+    /// Path to the Nipper inject-token file, re-read on every call.
+    token_path: String,
     tool_router: ToolRouter<Self>,
 }
 
@@ -47,6 +49,7 @@ impl SugoServer {
         run_repo: Arc<SqliteRunRepository>,
         callback_url: String,
         nipper_base: String,
+        token_path: String,
     ) -> Self {
         Self {
             repo,
@@ -54,6 +57,7 @@ impl SugoServer {
             clock: Arc::new(RealIdClock),
             callback_url,
             nipper_base,
+            token_path,
             tool_router: Self::tool_router(),
         }
     }
@@ -368,6 +372,7 @@ impl SugoServer {
         // Attach this run to the live Nipper chat session, then inject the first prompt.
         let att = nipper_client::attach(
             &self.nipper_base,
+            &self.token_path,
             &project_path,
             &out.run_id,
             &self.callback_url,
@@ -387,7 +392,7 @@ impl SugoServer {
             .run_repo
             .set_inject_pending(&out.run_id, Some(&self.clock.now_iso()))
             .await;
-        let inj = nipper_client::inject(&self.nipper_base, &project_path, &inject_text).await;
+        let inj = nipper_client::inject(&self.nipper_base, &self.token_path, &project_path, &inject_text).await;
         if let Some(e) = error::nipper_outcome_error(inj) {
             let _ = self.run_repo.set_inject_pending(&out.run_id, None).await;
             return Err(e);
@@ -474,7 +479,7 @@ impl SugoServer {
                     .set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso()))
                     .await;
             }
-            let inj = nipper_client::inject(&self.nipper_base, pp, &inject_text).await;
+            let inj = nipper_client::inject(&self.nipper_base, &self.token_path, pp, &inject_text).await;
             if let Some(e) = error::nipper_outcome_error(inj) {
                 let _ = self
                     .run_repo
@@ -483,7 +488,7 @@ impl SugoServer {
                 return Err(e);
             }
             if out.terminal {
-                let _ = nipper_client::detach(&self.nipper_base, pp).await;
+                let _ = nipper_client::detach(&self.nipper_base, &self.token_path, pp).await;
             }
         }
 
@@ -743,16 +748,24 @@ async fn main() -> anyhow::Result<()> {
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
 
     let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
+    let token_dir_name = if cfg!(debug_assertions) { ".nipper-dev" } else { ".nipper" };
+    let token_path = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("home directory not found"))?
+        .join(token_dir_name)
+        .join("inject-token")
+        .to_string_lossy()
+        .into_owned();
     // Start the machine-wide callback server on its fixed port, or reuse the
     // URL of an already-running instance if the port is taken (see callback.rs).
     let callback_state = callback::CallbackState {
         run_repo: run_repo.clone(),
         clock: Arc::new(RealIdClock),
         nipper_base: nipper_base.clone(),
+        token_path: token_path.clone(),
     };
     let callback_url = callback::start(callback_state).await?;
 
-    let server = SugoServer::new(harness_repo, run_repo, callback_url, nipper_base);
+    let server = SugoServer::new(harness_repo, run_repo, callback_url, nipper_base, token_path);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -777,11 +790,14 @@ mod tests {
         conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA)
             .expect("schema");
         let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(conn)));
+        let token_path = std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&token_path, "test-token").expect("write temp token");
         SugoServer::new(
             harness_repo,
             run_repo,
             "http://127.0.0.1:1".to_string(),
             "http://127.0.0.1:1".to_string(),
+            token_path.to_string_lossy().into_owned(),
         )
     }
 
