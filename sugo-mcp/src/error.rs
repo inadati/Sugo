@@ -51,6 +51,14 @@ pub fn nipper_outcome_error(outcome: NipperOutcome) -> Option<ErrorData> {
         NipperOutcome::NoSession => ("no live Nipper chat session for this project_path", "no_session"),
         NipperOutcome::BadRequest => ("Nipper rejected the request", "bad_request"),
         NipperOutcome::Unreachable => ("Nipper inject API is unreachable on 127.0.0.1:8771", "nipper_unreachable"),
+        NipperOutcome::Unauthorized => (
+            "Nipper rejected the inject token (mismatch) — Nipper may have been restarted",
+            "unauthorized",
+        ),
+        NipperOutcome::TokenUnavailable => (
+            "could not read Nipper inject token file — is Nipper running?",
+            "token_unavailable",
+        ),
     };
     Some(ErrorData::internal_error(msg.to_string(), Some(json!({ "code": code }))))
 }
@@ -147,6 +155,18 @@ mod tests {
     fn nipper_unreachable_maps_code() {
         let e = nipper_outcome_error(NipperOutcome::Unreachable).unwrap();
         assert_eq!(code_of(&e), "nipper_unreachable");
+    }
+
+    #[test]
+    fn nipper_unauthorized_maps_code() {
+        let e = nipper_outcome_error(NipperOutcome::Unauthorized).unwrap();
+        assert_eq!(code_of(&e), "unauthorized");
+    }
+
+    #[test]
+    fn nipper_token_unavailable_maps_code() {
+        let e = nipper_outcome_error(NipperOutcome::TokenUnavailable).unwrap();
+        assert_eq!(code_of(&e), "token_unavailable");
     }
 
     #[test]

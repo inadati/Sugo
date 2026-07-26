@@ -14,15 +14,26 @@ pub enum NipperOutcome {
     NoSession,
     BadRequest,
     Unreachable,
+    Unauthorized,
+    TokenUnavailable,
 }
 
-/// Map an HTTP status to an outcome (200 => Ok, 404 => NoSession, else BadRequest).
+/// Map an HTTP status to an outcome (200 => Ok, 404 => NoSession, 401 => Unauthorized, else BadRequest).
 fn classify(status: u16) -> NipperOutcome {
     match status {
         200 => NipperOutcome::Ok,
         404 => NipperOutcome::NoSession,
+        401 => NipperOutcome::Unauthorized,
         _ => NipperOutcome::BadRequest,
     }
+}
+
+/// Read the inject token file, trimming any trailing newline.
+/// Returns Err if the file cannot be read (e.g. Nipper not running).
+fn read_token(path: &str) -> Result<String, ()> {
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_string())
+        .map_err(|_| ())
 }
 
 async fn post(base: &str, path: &str, body: serde_json::Value) -> NipperOutcome {
@@ -52,6 +63,12 @@ mod tests {
     use super::*;
     use axum::{routing::post, Router, Json, http::StatusCode};
     use serde_json::Value;
+
+    fn write_temp_token(contents: &str) -> String {
+        let path = std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, contents).unwrap();
+        path.to_string_lossy().into_owned()
+    }
 
     async fn spawn_mock(status: StatusCode) -> String {
         let app = Router::new().route(
@@ -89,6 +106,19 @@ mod tests {
     fn classify_maps_statuses() {
         assert_eq!(classify(200), NipperOutcome::Ok);
         assert_eq!(classify(404), NipperOutcome::NoSession);
+        assert_eq!(classify(401), NipperOutcome::Unauthorized);
         assert_eq!(classify(400), NipperOutcome::BadRequest);
+    }
+
+    #[test]
+    fn read_token_reads_trimmed_contents() {
+        let path = write_temp_token("abc123\n");
+        assert_eq!(read_token(&path), Ok("abc123".to_string()));
+    }
+
+    #[test]
+    fn read_token_missing_file_is_err() {
+        let path = std::env::temp_dir().join(format!("sugo-test-missing-{}", uuid::Uuid::new_v4()));
+        assert_eq!(read_token(path.to_str().unwrap()), Err(()));
     }
 }
