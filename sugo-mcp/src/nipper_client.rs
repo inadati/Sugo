@@ -197,6 +197,10 @@ mod tests {
         assert_eq!(read_token(path.to_str().unwrap()).await, Err(std::io::ErrorKind::NotFound));
     }
 
+    // NOTE: these two tests assume a non-root test runner. `chmod 0o000` does not
+    // block reads for the root user, so if CI ever runs as root (e.g. inside an
+    // unmodified container) these would silently pass without exercising the
+    // PermissionDenied path (false-negative coverage, not a false failure).
     #[cfg(unix)]
     #[tokio::test]
     async fn read_token_permission_denied_is_distinguished() {
