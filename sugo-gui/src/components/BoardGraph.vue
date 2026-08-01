@@ -400,14 +400,31 @@ function placeNewNodes(saved: PositionMap, missingIds: string[]) {
 /// 基準に計算してしまい、一部のノードが実際の表示領域外に配置されて
 /// 見えなくなることがあったため。
 const MAX_FIT_ZOOM = 1.0;
+const FIT_PADDING = 40;
+
+// cy.fit() / cy.center() は水平方向もグラフを画面中央に配置するため、
+// マス追加・編集のたびに refresh() 経由で fitView() が再実行されると
+// ユーザーが左寄せに戻した表示位置がその都度リセットされてしまう
+// （手動で毎回左寄せし直す必要があった）。fitView() の最後で水平位置
+// のみ左詰めに補正し、垂直方向のセンタリングは維持する。
+function alignLeft(padding: number) {
+  if (!cy) return;
+  const bb = cy.elements().boundingBox();
+  if (!Number.isFinite(bb.x1)) return;
+  const zoom = cy.zoom();
+  const pan = cy.pan();
+  cy.pan({ x: padding - bb.x1 * zoom, y: pan.y });
+}
+
 function fitView() {
   if (!cy) return;
   cy.resize();
-  cy.fit(undefined, 40);
+  cy.fit(undefined, FIT_PADDING);
   if (cy.zoom() > MAX_FIT_ZOOM) {
     cy.zoom(MAX_FIT_ZOOM);
     cy.center();
   }
+  alignLeft(FIT_PADDING);
 }
 
 function placeNodes() {
