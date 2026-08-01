@@ -103,6 +103,17 @@ describe("EdgeEditor", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("add モードでは削除ボタンが表示されない", () => {
+    const wrapper = mount(EdgeEditor, { props: addProps });
+    expect(wrapper.find('[data-testid="edge-delete"]').exists()).toBe(false);
+  });
+
+  it("edit モードで削除ボタンをクリックすると delete イベントを emit する", async () => {
+    const wrapper = mount(EdgeEditor, { props: editProps });
+    await wrapper.find('[data-testid="edge-delete"]').trigger("click");
+    expect(wrapper.emitted("delete")).toEqual([[{ from: "c1", to: "c2", label: "old" }]]);
+  });
+
   it("does not double-invoke when submit button is clicked repeatedly while submitting", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockClear();

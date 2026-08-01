@@ -35,9 +35,17 @@
         class="w-full border border-gray-300 rounded px-2 py-1 mb-3 focus:outline-none focus:border-blue-400"
       />
       <p v-if="errorMsg" class="text-red-500 text-xs mb-2">{{ errorMsg }}</p>
-      <div class="flex justify-end gap-2">
-        <button data-testid="edge-cancel" class="px-3 py-1 text-gray-600 hover:bg-gray-100 rounded text-sm" @click="$emit('close')">キャンセル</button>
-        <button data-testid="edge-submit" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 text-sm" :disabled="submitting" @click="submit">保存</button>
+      <div class="flex justify-between gap-2">
+        <button
+          v-if="mode === 'edit'"
+          data-testid="edge-delete"
+          class="px-3 py-1 text-red-500 hover:bg-red-50 rounded text-sm"
+          @click="$emit('delete', { from, to, label: oldLabel! })"
+        >削除</button>
+        <div class="flex justify-end gap-2 ml-auto">
+          <button data-testid="edge-cancel" class="px-3 py-1 text-gray-600 hover:bg-gray-100 rounded text-sm" @click="$emit('close')">キャンセル</button>
+          <button data-testid="edge-submit" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 text-sm" :disabled="submitting" @click="submit">保存</button>
+        </div>
       </div>
     </div>
   </div>
@@ -65,6 +73,7 @@ const emit = defineEmits<{
   close: [];
   saved: [newVersion: number, lockVersion: number];
   reload: [message: string];
+  delete: [payload: { from: string; to: string; label: string }];
 }>();
 
 const label = ref(props.initialLabel ?? "");

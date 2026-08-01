@@ -77,6 +77,7 @@
       @close="edgeEditor = null"
       @saved="onEdgeSaved"
       @reload="onEditorReload"
+      @delete="onEdgeEditorDelete"
     />
   </div>
   <div v-else class="text-gray-400">読み込み中...</div>
@@ -203,6 +204,11 @@ async function onEditorReload(message: string) {
   edgeEditor.value = null;
   showToast(message);
   await load();
+}
+
+async function onEdgeEditorDelete(payload: { from: string; to: string; label: string }) {
+  edgeEditor.value = null;
+  await onEdgeDelete(payload);
 }
 
 async function onEdgeDelete(payload: { from: string; to: string; label: string }) {

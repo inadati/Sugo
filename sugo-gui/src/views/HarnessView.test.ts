@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../components/BoardGraph.vue", () => ({
-  default: { name: "BoardGraph", emits: ["select"], template: "<div/>" },
+  default: { name: "BoardGraph", emits: ["select", "edge-edit"], template: "<div/>" },
 }));
 vi.mock("../components/AddCellDialog.vue", () => ({ default: { name: "AddCellDialog", template: "<div/>" } }));
 vi.mock("../components/CellDetailPanel.vue", () => ({
@@ -47,6 +47,29 @@ describe("HarnessView", () => {
     wrapper.findComponent({ name: "BoardGraph" }).vm.$emit("select", "c1");
     await wrapper.vm.$nextTick();
     expect(wrapper.findComponent({ name: "CellDetailPanel" }).exists()).toBe(true);
+  });
+
+  it("EdgeEditorの削除ボタンでdelete_edgeを呼び、エディタを閉じる", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    wrapper.findComponent({ name: "BoardGraph" }).vm.$emit("edge-edit", {
+      from: "c1", to: "c2", label: "next", guard: null, x: 10, y: 10,
+    });
+    await wrapper.vm.$nextTick();
+
+    vi.mocked(invoke).mockResolvedValueOnce({ new_version: 2, lock_version: 1 });
+    await wrapper.find('[data-testid="edge-delete"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(invoke).toHaveBeenCalledWith("delete_edge", {
+      harnessId: "h1", from: "c1", to: "c2", label: "next", lockVersion: 0,
+    });
+    expect(wrapper.find('[data-testid="edge-delete"]').exists()).toBe(false);
   });
 
   it("reloads detail when polled current_version changes", async () => {
