@@ -488,7 +488,7 @@ impl SugoServer {
                 return Err(e);
             }
             if out.terminal {
-                let _ = nipper_client::detach(&self.nipper_base, &self.token_path, pp).await;
+                let _ = nipper_client::detach(&self.nipper_base, &self.token_path, pp, &run_id_for_lookup).await;
             }
         }
 

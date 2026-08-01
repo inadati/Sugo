@@ -76,8 +76,8 @@ pub async fn inject(base: &str, token_path: &str, project_path: &str, text: &str
     post(base, "/inject", token_path, json!({ "project_path": project_path, "text": text })).await
 }
 
-pub async fn detach(base: &str, token_path: &str, project_path: &str) -> NipperOutcome {
-    post(base, "/detach", token_path, json!({ "project_path": project_path })).await
+pub async fn detach(base: &str, token_path: &str, project_path: &str, run_id: &str) -> NipperOutcome {
+    post(base, "/detach", token_path, json!({ "project_path": project_path, "run_id": run_id })).await
 }
 
 #[cfg(test)]
@@ -175,6 +175,35 @@ mod tests {
 
         assert_eq!(inject(&base, &token_path, "/p", "hi").await, NipperOutcome::Ok);
         assert_eq!(captured.lock().unwrap().clone(), Some("tok123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn detach_sends_run_id_in_body() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let captured_clone = captured.clone();
+        let app = Router::new().route(
+            "/detach",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured_clone.clone();
+                async move {
+                    *captured.lock().unwrap() = Some(body);
+                    (StatusCode::OK, Json(json!({"status":"ok"})))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let base = format!("http://{addr}");
+        let token_path = write_temp_token("tok123");
+
+        assert_eq!(detach(&base, &token_path, "/p", "run-xyz").await, NipperOutcome::Ok);
+        assert_eq!(
+            captured.lock().unwrap().as_ref().and_then(|b| b.get("run_id")).and_then(|v| v.as_str()),
+            Some("run-xyz")
+        );
     }
 
     #[test]
