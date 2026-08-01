@@ -34,7 +34,7 @@ vi.mock("cytoscape", () => {
       trigger: (ev: string, sel: string | undefined, ...args: any[]) => {
         handlers.filter((h) => h.ev === ev && h.sel === sel).forEach((h) => h.cb(...args));
       },
-      elements: () => ({ remove: vi.fn() }),
+      elements: () => ({ remove: vi.fn(), boundingBox: () => ({ x1: 0, y1: 0, x2: 0, y2: 0 }) }),
       add: vi.fn(),
       nodes: () => ({ forEach: vi.fn(), filter: () => ({ boundingBox: () => ({ x1: 0, y1: 0, x2: 0, y2: 0 }) }) }),
       getElementById: (id: string) => makeEl(id),
@@ -43,6 +43,7 @@ vi.mock("cytoscape", () => {
       fit: vi.fn(),
       resize: vi.fn(),
       zoom: vi.fn(() => 1),
+      pan: vi.fn(() => ({ x: 0, y: 0 })),
       center: vi.fn(),
       destroy: vi.fn(),
     };

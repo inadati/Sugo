@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "sugo-gui"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "anyhow",
  "chrono",

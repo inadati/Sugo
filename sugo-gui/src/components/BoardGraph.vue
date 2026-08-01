@@ -470,9 +470,14 @@ function initCy() {
   cy.on("tap", "node", (evt) => {
     selected.value = { type: "node", id: evt.target.id() as string };
     emit("select", evt.target.id() as string);
+    // cytoscapeの内部canvasへのクリックはDOMフォーカスを移さないため、
+    // 明示的にコンテナへフォーカスしないとDelete/Backspaceのkeydownが
+    // ここに届かず、ブラウザ既定の「戻る」動作だけが発火してしまう。
+    container.value?.focus();
   });
   cy.on("tap", "edge", (evt) => {
     selected.value = { type: "edge", id: evt.target.id() as string };
+    container.value?.focus();
   });
   // 背景クリックで選択解除
   cy.on("tap", (evt) => {
@@ -578,6 +583,8 @@ function onKeydown(e: KeyboardEvent) {
   if (!selected.value || !cy) return;
   const el = cy.getElementById(selected.value.id);
   if (!el || el.length === 0) return;
+  // Backspaceのブラウザ既定動作（履歴を戻る）を止める。
+  e.preventDefault();
   if (selected.value.type === "edge") {
     const d = el.data();
     emit("edgeDelete", {
