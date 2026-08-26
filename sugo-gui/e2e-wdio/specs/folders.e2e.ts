@@ -55,13 +55,39 @@ describe("harness folders (real Tauri app + real SQLite file)", () => {
     // setup closure are not ordered relative to each other. Poll the real
     // `list_harnesses` invoke until the backend state is actually up rather
     // than assuming the window being interactive means the DB is ready.
+    //
+    // This calls `window.__TAURI_INTERNALS__.invoke` directly rather than
+    // `window.__TAURI__.core.invoke`. `__TAURI_INTERNALS__` is the low-level
+    // IPC bridge that Tauri's init script (scripts/ipc.js) always injects
+    // into every webview, unconditionally — it is literally what
+    // `@tauri-apps/api/core`'s own `invoke()` calls under the hood (see
+    // node_modules/@tauri-apps/api/core.js:202), so this is the same code
+    // path the app's Vue components use, not a shortcut around it.
+    // `window.__TAURI__` (the friendlier `.core.invoke` global) is a
+    // *different* thing: tauri-codegen only bakes it into the binary at
+    // compile time when `tauri.conf.json`'s `app.withGlobalTauri` is `true`
+    // (see tauri-codegen's `context.rs`, `plugin_global_api_scripts`), and
+    // that flag is read from the static config file by the
+    // `tauri::generate_context!()` macro at compile time. The
+    // `--config '{"app":{"withGlobalTauri":true}}'` override only reaches
+    // that macro when the build goes through the `tauri` CLI (which sets
+    // `TAURI_CONFIG` before invoking cargo); a plain
+    // `cargo build -p sugo-gui --features webdriver` never sets that env
+    // var, so `window.__TAURI__` is structurally absent from the binary and
+    // every access throws — which is exactly the failure this suite hit
+    // before this fix (RESULT: false on every poll, no other error
+    // surfaced). Using `__TAURI_INTERNALS__` sidesteps the whole
+    // withGlobalTauri build-config dependency and works with a bare
+    // `cargo build`.
     await browser.waitUntil(
       async () => {
         const ok = await browser.execute(async () => {
           try {
-            await (window as unknown as { __TAURI__: { core: { invoke: (c: string) => Promise<unknown> } } }).__TAURI__.core.invoke(
-              "list_harnesses",
-            );
+            await (
+              window as unknown as {
+                __TAURI_INTERNALS__: { invoke: (c: string) => Promise<unknown> };
+              }
+            ).__TAURI_INTERNALS__.invoke("list_harnesses");
             return true;
           } catch {
             return false;

@@ -17,15 +17,30 @@ are supported, since macOS has no equivalent WKWebView driver tool).
 ## Running it
 
 ```bash
-# 1. Build the app with the webdriver server compiled in, and the JS-global
-#    Tauri API exposed (only @wdio/tauri-service's internal diagnostics need
-#    window.__TAURI__; the app's own code always uses @tauri-apps/api).
-npx tauri build --debug --no-bundle --features webdriver \
-  --config '{"app":{"withGlobalTauri":true}}'
+# 1. Build the app with the webdriver server compiled in.
+cargo build -p sugo-gui --features webdriver
+npx vite build
 
 # 2. Run the suite against that binary.
 npm run test:e2e-wdio
 ```
+
+A plain `cargo build` is all that's needed — no `--config` override. Earlier
+this suite polled `window.__TAURI__.core.invoke`, which only exists in the
+binary when `tauri.conf.json`'s `app.withGlobalTauri` is `true`; that flag is
+read by the `tauri::generate_context!()` macro at *compile time*, and the
+`--config` override that sets it only takes effect when the build goes
+through the `tauri` CLI (which sets `TAURI_CONFIG` before invoking `cargo
+build`) — a bare `cargo build -p sugo-gui --features webdriver` never sets
+that env var, so `window.__TAURI__` was structurally absent and every call
+threw immediately (`RESULT: false` on every poll, `backend state (SQLite DB)
+never became ready` at the 10s timeout, even though the DB and app itself
+were fine). The suite now calls `window.__TAURI_INTERNALS__.invoke` instead
+— the low-level IPC bridge Tauri's init script always injects into every
+webview regardless of config, and literally what `@tauri-apps/api/core`'s own
+`invoke()` calls internally (`node_modules/@tauri-apps/api/core.js:202`). See
+the comment in `specs/folders.e2e.ts` for the full trace of how this was
+diagnosed.
 
 The config (`wdio.conf.ts`) points `appBinaryPath` at
 `../../target/debug/sugo-gui` and sets `SUGO_DB` to a fresh temp file per run

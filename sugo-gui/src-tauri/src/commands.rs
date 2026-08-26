@@ -1813,4 +1813,183 @@ mod tests {
         assert_eq!(dto.folder_id.as_deref(), Some(f.folder_id.as_str()));
         assert_eq!(dto.folder_name.as_deref(), Some("開発"));
     }
+
+    // ── folders：実 SQLite ファイルへの永続化（Tauri IPC を経由しない統合テスト）──
+    //
+    // 上のフォルダ系テストはすべて `InMemoryHarnessRepository`（フェイク）に
+    // 対して動かしており、`folder_id` が実際にディスク上の SQLite ファイルへ
+    // 書き込まれることは一度も検証していなかった。
+    //
+    // design.md L157 は「ドラッグ&ドロップは Playwright で実際に動かし、DB に
+    // 実データを入れた状態で確認する」ことを求めており、それを受けて
+    // sugo-gui/e2e-wdio/（実 Tauri バイナリ + 実 SQLite ファイル + WebdriverIO）
+    // を追加した。だが実際に `cargo build -p sugo-gui --features webdriver` /
+    // `npx vite build` / `npx wdio run ./e2e-wdio/wdio.conf.ts` の手順で検証した
+    // ところ、WKWebView が `about:blank` のまま一度も実フロントエンドへ遷移せず
+    // （`browser.execute()` で `location.href` を直接読んでも `about:blank`、
+    // `document.body.innerHTML.length` は常に 0、30 秒待っても変化しない。plugin
+    // 自身の `browser.saveScreenshot()` — macOS の画面収録権限に依存しない、
+    // WKWebView 自身のオフスクリーンスナップショット API 経由 — で撮った画像も
+    // 真っ白だった）、`window.__TAURI_INTERNALS__.invoke`（`@tauri-apps/api/core`
+    // の `invoke()` が実際に呼ぶ低レベル IPC ブリッジそのもの。フレンドリーな
+    // `window.__TAURI__.core.invoke` ではなく、こちらを直接呼ぶよう既に修正済み
+    // ―― `window.__TAURI__` は `tauri.conf.json` の `app.withGlobalTauri` が
+    // `true` の場合のみ `tauri::generate_context!()` がコンパイル時に埋め込む
+    // グローバルで、`--config` 経由の上書きは `tauri` CLI を介したビルドでしか
+    // 効かず、素の `cargo build` では効かない。この分だけでも本物のバグであり
+    // 修正済みだが、それを直しても以下の about:blank 問題は解消しなかった）
+    // すら一度も成功しなかった。
+    //
+    // `tauri-plugin-wdio-webdriver` のソース自体に「macOS headless run-loop
+    // pump」（アップストリーム issue #540 相当）に関するコメントがあり、
+    // ウィンドウがフォアグラウンド化されない/自動化された子プロセスとして
+    // 起動された場合の WKWebView のナビゲーション完了・描画パイプラインが
+    // 不安定になりうることを示唆している。手動で同一バイナリを
+    // ターミナルから起動した場合はクラッシュせず DB スキーマも正しく
+    // 初期化される（Rust 側は健全）ため、問題は WebDriver 経由の自動化された
+    // 起動パスと WKWebView のナビゲーション完了の間にあると判断した。
+    //
+    // これは tauri-plugin-wdio-webdriver（および @wdio/tauri-service の
+    // embedded driver 経路）が、この環境での自動実行に技術的に耐えない
+    // ライブラリ不適合に該当すると判断した。詳細と再現手順は
+    // sugo-gui/e2e-wdio/README.md に記載した。
+    //
+    // 代替として、Tauri IPC 層だけを迂回し、その内側（実 usecase → 実
+    // `SqliteHarnessRepository` → 実ファイル）を "*_inner" 関数への直接呼び出し
+    // で実行し、書き込み結果を本テストプロセスとは無関係な `sqlite3` CLI
+    // （外部プロセス）で読み出して確認する。これにより「実データでの検証」と
+    // いう design.md の趣旨は、IPC 境界を除いて満たされる。
+    // （sugo-gui/e2e/folders.spec.ts の Playwright スタブは Vue 側の振る舞いを、
+    // ここでの実 SQLite 統合テストは実データ永続化を、それぞれ担保する。）
+
+    /// テストごとに一意な一時ディレクトリを作る。PID だけでなくナノ秒時刻と
+    /// プロセス内カウンタも混ぜるのは、CI での PID 再利用や並列テスト実行での
+    /// 衝突を避けるため（sugo-infra 側の同種ヘルパーと同じ設計）。
+    fn real_sqlite_temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "sugo-gui-folder-real-sqlite-{tag}-{}-{nanos}-{counter}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// `sqlite3` CLI で1つのスカラー値を読み出す。本テストプロセス（および
+    /// アプリのメモリ上の repo ハンドル）とは完全に独立した外部プロセスで
+    /// ファイルを読むことで、「アプリが主張しているだけ」ではなく実際に
+    /// ディスクへ書かれたことを確認する。
+    fn query_scalar_via_sqlite3_cli(db_path: &str, sql: &str) -> String {
+        let output = std::process::Command::new("sqlite3")
+            .arg(db_path)
+            .arg(sql)
+            .output()
+            .expect("run sqlite3 CLI (is it installed and on PATH?)");
+        assert!(
+            output.status.success(),
+            "sqlite3 query failed: sql={sql:?} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn real_sqlite_file_persists_folder_id_after_move() {
+        use sugo_infra::sqlite::repository::SqliteHarnessRepository;
+
+        let dir = real_sqlite_temp_dir("move");
+        let db_path = dir.join("sugo.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        // 実ファイル SQLite に対して、Tauri コマンドの実体（*_inner）を直接呼ぶ。
+        // Tauri State<AppState> も IPC も一切介さない。
+        let repo = SqliteHarnessRepository::open(db_path_str).expect("open real sqlite file");
+
+        let harness = create_harness_inner(&repo, "real-sqlite-harness".into(), None)
+            .await
+            .expect("create_harness_inner");
+        let folder = create_folder_inner(&repo, "実データ確認フォルダ".into())
+            .await
+            .expect("create_folder_inner");
+        move_harness_to_folder_inner(
+            &repo,
+            harness.harness_id.clone(),
+            Some(folder.folder_id.clone()),
+        )
+        .await
+        .expect("move_harness_to_folder_inner");
+
+        // アプリ側のハンドルを閉じてから、完全に独立した `sqlite3` CLI だけで
+        // ファイルを読む。
+        drop(repo);
+
+        let persisted_folder_id = query_scalar_via_sqlite3_cli(
+            db_path_str,
+            &format!(
+                "SELECT folder_id FROM harnesses WHERE id = '{}';",
+                harness.harness_id
+            ),
+        );
+        assert_eq!(
+            persisted_folder_id, folder.folder_id,
+            "実ファイル上の harnesses.folder_id が実フォルダIDと一致すること"
+        );
+
+        let persisted_name = query_scalar_via_sqlite3_cli(
+            db_path_str,
+            &format!("SELECT name FROM folders WHERE id = '{}';", folder.folder_id),
+        );
+        assert_eq!(persisted_name, "実データ確認フォルダ");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn real_sqlite_file_delete_folder_moves_harness_to_uncategorized_on_disk() {
+        use sugo_infra::sqlite::repository::SqliteHarnessRepository;
+
+        let dir = real_sqlite_temp_dir("delete");
+        let db_path = dir.join("sugo.db");
+        let db_path_str = db_path.to_str().unwrap();
+
+        let repo = SqliteHarnessRepository::open(db_path_str).expect("open real sqlite file");
+        let harness = create_harness_inner(&repo, "h".into(), None).await.unwrap();
+        let folder = create_folder_inner(&repo, "一時フォルダ".into()).await.unwrap();
+        move_harness_to_folder_inner(
+            &repo,
+            harness.harness_id.clone(),
+            Some(folder.folder_id.clone()),
+        )
+        .await
+        .unwrap();
+
+        let del = delete_folder_inner(&repo, folder.folder_id.clone())
+            .await
+            .unwrap();
+        assert_eq!(del.name, "一時フォルダ");
+        assert_eq!(del.moved_to_uncategorized, 1);
+        drop(repo);
+
+        let is_null = query_scalar_via_sqlite3_cli(
+            db_path_str,
+            &format!(
+                "SELECT folder_id IS NULL FROM harnesses WHERE id = '{}';",
+                harness.harness_id
+            ),
+        );
+        assert_eq!(is_null, "1", "削除後は実ファイル上で未分類（NULL）に戻ること");
+
+        let folder_count =
+            query_scalar_via_sqlite3_cli(db_path_str, "SELECT COUNT(*) FROM folders;");
+        assert_eq!(folder_count, "0", "フォルダ行自体は実ファイルから消えていること");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
