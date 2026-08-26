@@ -44,6 +44,8 @@ pub enum IssueCode {
     HasDraft,
     /// `cell_remove` targeted the board's `start` cell, which cannot be removed.
     CannotRemoveStartCell,
+    /// フォルダ名が空、または64文字を超えている。
+    InvalidFolderName,
 }
 
 /// A single problem found while validating a board definition.
