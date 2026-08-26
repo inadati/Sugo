@@ -122,6 +122,10 @@ pub struct HarnessSummary {
     pub current_version: i64,
     /// Whether the current board version contains any draft cell.
     pub has_draft: bool,
+    /// 所属フォルダの ID。`None` は未分類。
+    pub folder_id: Option<String>,
+    /// 所属フォルダの表示名。`None` は未分類。
+    pub folder_name: Option<String>,
 }
 
 /// Returns a summary for every harness known to the repository.
@@ -129,14 +133,29 @@ pub async fn list_harness_summaries(
     repo: &dyn HarnessRepository,
 ) -> Result<Vec<HarnessSummary>, CoreError> {
     let harnesses = repo.list().await?;
+    // フォルダ名の解決はここで1回だけ行う（リポジトリ層に JOIN を持ち込まない）。
+    let names: std::collections::HashMap<String, String> = repo
+        .list_folders()
+        .await?
+        .into_iter()
+        .map(|(f, _)| (f.id, f.name))
+        .collect();
     Ok(harnesses
         .into_iter()
-        .map(|h| HarnessSummary {
-            harness_id: h.id,
-            name: h.name,
-            description: h.description,
-            current_version: h.current_version,
-            has_draft: h.has_draft,
+        .map(|h| {
+            let folder_name = h
+                .folder_id
+                .as_ref()
+                .and_then(|id| names.get(id).cloned());
+            HarnessSummary {
+                harness_id: h.id,
+                name: h.name,
+                description: h.description,
+                current_version: h.current_version,
+                has_draft: h.has_draft,
+                folder_id: h.folder_id,
+                folder_name,
+            }
         })
         .collect())
 }
@@ -433,5 +452,31 @@ mod tests {
         assert_eq!(summaries[1].name, "b");
         assert_eq!(summaries[0].current_version, 1);
         assert!(!summaries[0].has_draft);
+    }
+
+    #[tokio::test]
+    async fn summary_carries_folder_id_and_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let f = crate::usecase::folder::create_folder(&repo, &clock, "開発")
+            .await
+            .unwrap();
+        let (h, v) = crate::ports::repository::fake::sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some(&f.id)).await.unwrap();
+
+        let summaries = list_harness_summaries(&repo).await.unwrap();
+        assert_eq!(summaries[0].folder_id.as_deref(), Some(f.id.as_str()));
+        assert_eq!(summaries[0].folder_name.as_deref(), Some("開発"));
+    }
+
+    #[tokio::test]
+    async fn summary_of_uncategorized_harness_has_no_folder() {
+        let repo = InMemoryHarnessRepository::new();
+        let (h, v) = crate::ports::repository::fake::sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+        let summaries = list_harness_summaries(&repo).await.unwrap();
+        assert!(summaries[0].folder_id.is_none());
+        assert!(summaries[0].folder_name.is_none());
     }
 }
