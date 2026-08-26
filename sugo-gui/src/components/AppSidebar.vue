@@ -98,14 +98,23 @@
       @close="renameTarget = null"
       @saved="renameTarget = null; fetchFolders()"
     />
+
+    <!-- トースト -->
+    <div
+      v-if="toast"
+      data-testid="toast"
+      class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded shadow"
+    >{{ toast }}</div>
   </nav>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { useRoute, useRouter } from "vue-router";
 import { TrashIcon, ListBulletIcon, InboxIcon, FolderIcon, PencilIcon } from "@heroicons/vue/24/outline";
 import FolderNameDialog from "./FolderNameDialog.vue";
+import { useToast } from "../composables/useToast";
 
 interface FolderSummary {
   folder_id: string;
@@ -117,12 +126,25 @@ interface FolderSummary {
 const UNCATEGORIZED = "__uncategorized__";
 
 const POLL_INTERVAL_MS = 2000;
+const route = useRoute();
+const router = useRouter();
+const { toast, showToast } = useToast();
 const trashCount = ref(0);
 const folders = ref<FolderSummary[]>([]);
 const showCreateDialog = ref(false);
 const renameTarget = ref<FolderSummary | null>(null);
 const dragOverId = ref<string | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * invoke() の reject メッセージから NotFound 系（存在しない folder_id、
+ * 削除済みフォルダへの移動）を判定する。design.md のエラー処理表の通り、
+ * NotFound はトースト通知＋一覧再取得、それ以外（DB障害等）はエラー表示のみで
+ * 状態は変更しない。
+ */
+function isNotFoundError(e: unknown): boolean {
+  return String(e).includes("not found");
+}
 
 async function fetchTrashCount() {
   const items = await invoke<{ harness_id: string }[]>("list_trash");
@@ -138,16 +160,39 @@ function openRename(f: FolderSummary) {
 }
 
 async function doDeleteFolder(f: FolderSummary) {
-  await invoke("delete_folder", { folderId: f.folder_id });
-  await fetchFolders();
+  const wasViewingDeletedFolder = route.path === `/folder/${f.folder_id}`;
+  try {
+    await invoke("delete_folder", { folderId: f.folder_id });
+    await fetchFolders();
+    // design.md L137: 削除中のフォルダを表示していた場合はすべてのハーネスへ遷移する
+    if (wasViewingDeletedFolder) {
+      router.push("/");
+    }
+  } catch (e) {
+    if (isNotFoundError(e)) {
+      showToast("フォルダは既に見つかりません。一覧を更新しました。");
+      await fetchFolders();
+    } else {
+      showToast("フォルダの削除に失敗しました。");
+    }
+  }
 }
 
 async function onDrop(e: DragEvent, folderId: string | null) {
   dragOverId.value = null;
   const harnessId = e.dataTransfer?.getData("text/plain");
   if (!harnessId) return;
-  await invoke("move_harness_to_folder", { harnessId, folderId });
-  await fetchFolders();
+  try {
+    await invoke("move_harness_to_folder", { harnessId, folderId });
+    await fetchFolders();
+  } catch (e) {
+    if (isNotFoundError(e)) {
+      showToast("移動先が見つかりません。一覧を更新しました。");
+      await fetchFolders();
+    } else {
+      showToast("ハーネスの移動に失敗しました。");
+    }
+  }
 }
 
 onMounted(() => {

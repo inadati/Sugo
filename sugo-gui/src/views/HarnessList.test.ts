@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 import HarnessList from "./HarnessList.vue";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -161,5 +162,33 @@ describe("HarnessList – スコープ切り替え", () => {
     const wrapper = mount(HarnessList, { global: { plugins: [router] } });
     await new Promise((r) => setTimeout(r, 0));
     expect(wrapper.find("h2").text()).toBe("未分類");
+  });
+});
+
+describe("HarnessList – 右クリックでのフォルダ移動が失敗した場合", () => {
+  it("存在しない移動先の場合はトーストを表示し一覧を再取得する", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+    const callsBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("not found: f1")));
+    await wrapper.findAll("[data-testid='harness-row']")[0].trigger("contextmenu");
+    await wrapper.find("[data-testid='move-to-uncategorized']").trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.text()).toMatch(/見つかりません|移動に失敗/);
+    const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+  });
+
+  it("DB 障害で失敗した場合はエラー表示のみで一覧を再取得しない", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+    const callsBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("storage error: disk full")));
+    await wrapper.findAll("[data-testid='harness-row']")[0].trigger("contextmenu");
+    await wrapper.find("[data-testid='move-to-uncategorized']").trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.text()).toContain("失敗しました");
+    const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    expect(callsAfter).toBe(callsBefore);
   });
 });

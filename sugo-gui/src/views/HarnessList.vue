@@ -90,6 +90,13 @@
       @trash="onTrashFromMenu"
       @close="contextMenu = null"
     />
+
+    <!-- トースト -->
+    <div
+      v-if="toast"
+      data-testid="toast"
+      class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded shadow"
+    >{{ toast }}</div>
   </div>
 </template>
 
@@ -100,6 +107,7 @@ import { useRoute, useRouter } from "vue-router";
 import { TrashIcon } from "@heroicons/vue/24/outline";
 import NewHarnessDialog from "../components/NewHarnessDialog.vue";
 import HarnessContextMenu from "../components/HarnessContextMenu.vue";
+import { useToast } from "../composables/useToast";
 
 interface HarnessSummary {
   harness_id: string;
@@ -126,6 +134,7 @@ interface ContextMenuState {
 const POLL_INTERVAL_MS = 2000;
 const router = useRouter();
 const route = useRoute();
+const { toast, showToast } = useToast();
 const harnesses = ref<HarnessSummary[]>([]);
 const folders = ref<FolderSummary[]>([]);
 const trashTarget = ref<HarnessSummary | null>(null);
@@ -213,8 +222,17 @@ function openContextMenu(e: MouseEvent, h: HarnessSummary) {
 
 async function onMoveFromMenu(payload: { harnessId: string; folderId: string | null }) {
   contextMenu.value = null;
-  await invoke("move_harness_to_folder", { harnessId: payload.harnessId, folderId: payload.folderId });
-  await Promise.all([fetchHarnesses(), fetchFolders()]);
+  try {
+    await invoke("move_harness_to_folder", { harnessId: payload.harnessId, folderId: payload.folderId });
+    await Promise.all([fetchHarnesses(), fetchFolders()]);
+  } catch (e) {
+    if (String(e).includes("not found")) {
+      showToast("移動先が見つかりません。一覧を更新しました。");
+      await Promise.all([fetchHarnesses(), fetchFolders()]);
+    } else {
+      showToast("ハーネスの移動に失敗しました。");
+    }
+  }
 }
 
 function onTrashFromMenu(harnessId: string) {
