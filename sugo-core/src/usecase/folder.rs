@@ -131,6 +131,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creates_folder_with_single_character_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let f = create_folder(&repo, &clock, "あ").await.unwrap();
+        assert_eq!(f.name, "あ");
+    }
+
+    #[tokio::test]
     async fn rejects_name_longer_than_64_chars() {
         let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
