@@ -14,33 +14,80 @@ provider (`tauri-plugin-wdio-webdriver`, native WKWebView APIs on macOS — no
 platform" and exits non-zero; official docs confirm only Windows and Linux
 are supported, since macOS has no equivalent WKWebView driver tool).
 
+**Status: this suite passes and does what it claims.** It was rejected four
+times before this landed; the root cause was never the WebDriver plugin or
+the invoke API (see "Diagnosis history" below for what that dead end looked
+like) — it was that the app was being **built wrong**. Read "Running it"
+below and use the exact build command it specifies.
+
 ## Running it
 
 ```bash
-# 1. Build the app with the webdriver server compiled in.
-cargo build -p sugo-gui --features webdriver
-npx vite build
+# 1. Build through the Tauri CLI (NOT a bare `cargo build`!) in debug mode
+#    with the webdriver server compiled in.
+cd sugo-gui && npx tauri build --debug --no-bundle --features webdriver
 
 # 2. Run the suite against that binary.
 npm run test:e2e-wdio
 ```
 
-A plain `cargo build` is all that's needed — no `--config` override. Earlier
-this suite polled `window.__TAURI__.core.invoke`, which only exists in the
-binary when `tauri.conf.json`'s `app.withGlobalTauri` is `true`; that flag is
-read by the `tauri::generate_context!()` macro at *compile time*, and the
-`--config` override that sets it only takes effect when the build goes
-through the `tauri` CLI (which sets `TAURI_CONFIG` before invoking `cargo
-build`) — a bare `cargo build -p sugo-gui --features webdriver` never sets
-that env var, so `window.__TAURI__` was structurally absent and every call
-threw immediately (`RESULT: false` on every poll, `backend state (SQLite DB)
-never became ready` at the 10s timeout, even though the DB and app itself
-were fine). The suite now calls `window.__TAURI_INTERNALS__.invoke` instead
-— the low-level IPC bridge Tauri's init script always injects into every
-webview regardless of config, and literally what `@tauri-apps/api/core`'s own
-`invoke()` calls internally (`node_modules/@tauri-apps/api/core.js:202`). See
-the comment in `specs/folders.e2e.ts` for the full trace of how this was
-diagnosed.
+`npm run test:e2e-wdio` also runs step 1 automatically via the
+`pretest:e2e-wdio` npm script — `npm run test:e2e-wdio` alone is enough. Step
+1 is spelled out here because that command is the actual fix and must not be
+"simplified" back to a bare `cargo build` (see below).
+
+### Why it has to be `tauri build`, not `cargo build`
+
+A bare `cargo build -p sugo-gui --features webdriver` **compiles successfully
+and produces a runnable binary** — but that binary's embedded frontend-asset
+table is empty. Every asset request 404s at runtime with a literal
+`asset not found: <path>` body (confirmed by using the plugin's own
+`POST /session/{id}/url` WebDriver command to navigate straight to
+`tauri://localhost/`, `tauri://localhost/index.html`, and
+`tauri://localhost/assets/index-*.js` — all three came back as that same
+error page, on a binary built *after* `dist/` had fresh, correct content).
+Since even the app's *own default* startup navigation target has nothing to
+render, the webview never receives a single byte of HTML and simply never
+leaves `about:blank` — `document.readyState` reports `"complete"` (there is
+genuinely nothing left to load) and `window.__TAURI_INTERNALS__` is
+`undefined` because Tauri's init script is injected as part of *that* missing
+HTML document, not independently of it.
+
+The reason is that `tauri.conf.json`'s `build.beforeBuildCommand`
+(`npm run build`) and the environment variables `tauri-build`'s
+`generate_context!()` macro relies on to embed `frontendDist` correctly are
+set up by the **`tauri` CLI**, not by `cargo` alone. `npx tauri build --debug
+--no-bundle` runs that full pipeline (rebuilding `dist/` from source and
+setting those variables before invoking `cargo`) the same way the real
+release build (`cargo tauri build`, used for `/Applications/Sugo.app`)
+already does — which is exactly why normal releases were never affected by
+this, only this suite's hand-rolled build step was.
+
+### Diagnosis history (what turned out to be a dead end)
+
+Three earlier rounds chased this as a WKWebView/plugin problem, because the
+symptom — `Error: backend state (SQLite DB) never became ready` from polling
+`list_harnesses` — looked exactly like an IPC-bridge or navigation bug:
+
+- Round 2: `tauri-driver` doesn't support macOS at all → switched to
+  `@wdio/tauri-service`'s embedded `tauri-plugin-wdio-webdriver` provider.
+- Round 3: found `window.__TAURI__.core.invoke` doesn't exist in the binary.
+- Round 4: switched the poll to `window.__TAURI_INTERNALS__.invoke` (the
+  lower-level IPC bridge Tauri's init script always injects, regardless of
+  the `app.withGlobalTauri` config flag). **This fix is real and still
+  correct** — `withGlobalTauri` genuinely isn't enabled here, and
+  `__TAURI_INTERNALS__` genuinely is the right thing to poll — but it did
+  not touch the actual defect, so the suite kept failing identically
+  afterward, which is what triggered this round.
+
+Round 5 (this one) reproduced the exact same failure, then went one layer
+deeper than "which invoke global" by asking whether the webview had loaded
+*any* page at all. Probing `location.href` directly via the plugin's raw
+WebDriver HTTP endpoint (bypassing WebdriverIO's client entirely) showed
+`about:blank`, and a native WKWebView snapshot via the same endpoint showed a
+blank white window — not a slow load, not a race, just nothing there. That
+pointed at asset embedding rather than navigation/IPC, which is where the
+real fix above came from.
 
 The config (`wdio.conf.ts`) points `appBinaryPath` at
 `../../target/debug/sugo-gui` and sets `SUGO_DB` to a fresh temp file per run

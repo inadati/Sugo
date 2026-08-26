@@ -74,11 +74,19 @@ describe("harness folders (real Tauri app + real SQLite file)", () => {
     // `TAURI_CONFIG` before invoking cargo); a plain
     // `cargo build -p sugo-gui --features webdriver` never sets that env
     // var, so `window.__TAURI__` is structurally absent from the binary and
-    // every access throws — which is exactly the failure this suite hit
-    // before this fix (RESULT: false on every poll, no other error
-    // surfaced). Using `__TAURI_INTERNALS__` sidesteps the whole
-    // withGlobalTauri build-config dependency and works with a bare
-    // `cargo build`.
+    // every access throws. Using `__TAURI_INTERNALS__` sidesteps the whole
+    // withGlobalTauri build-config dependency and is the correct thing to
+    // poll regardless of build method.
+    //
+    // NOTE: this switch alone does NOT fix "backend state (SQLite DB) never
+    // became ready" — that symptom came back identically after this landed.
+    // The actual cause was that the app must be built via
+    // `npx tauri build --debug --no-bundle --features webdriver` (see
+    // ../README.md, "Why it has to be `tauri build`, not `cargo build`"),
+    // not a bare `cargo build -p sugo-gui --features webdriver`: the latter
+    // compiles fine but embeds an empty frontend-asset table, so the webview
+    // never has any HTML to load and stays on about:blank forever — no
+    // Tauri init script ever runs, `__TAURI_INTERNALS__` or otherwise.
     await browser.waitUntil(
       async () => {
         const ok = await browser.execute(async () => {

@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "pretest:e2e-wdio": "tauri build --debug --no-bundle --features webdriver",
     "test:e2e-wdio": "wdio run ./e2e-wdio/wdio.conf.ts"
   },
   "dependencies": {

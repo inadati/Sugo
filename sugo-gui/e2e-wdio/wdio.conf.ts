@@ -23,6 +23,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * macOS — no `tauri-driver` needed; `tauri-driver` itself does not support
  * macOS, see docs/e2e-webdriver.md), and asserts against the DB file on disk
  * afterwards.
+ *
+ * IMPORTANT: that binary MUST be built via
+ * `npx tauri build --debug --no-bundle --features webdriver` (wired up as
+ * the `pretest:e2e-wdio` npm script), never a bare
+ * `cargo build -p sugo-gui --features webdriver`. The bare form compiles
+ * successfully but embeds an empty frontend-asset table, so the webview
+ * never loads any HTML and stays on about:blank forever — see
+ * ../README.md, "Why it has to be `tauri build`, not `cargo build`", for the
+ * full diagnosis (this cost 5 rounds of this suite's review before it was
+ * found).
  */
 
 // A fresh, isolated DB file per run so this suite never touches the
