@@ -58,6 +58,7 @@ fn harness(id: &str, name: &str, current_version: i64, lock_version: i64) -> Har
         id: id.into(),
         name: name.into(),
         description: None,
+        folder_id: None,
         current_version,
         has_draft: false,
         lock_version,

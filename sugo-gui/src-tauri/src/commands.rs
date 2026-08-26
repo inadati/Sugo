@@ -73,6 +73,7 @@ async fn create_harness_inner(
         id: harness_id.clone(),
         name: trimmed.to_string(),
         description,
+        folder_id: None,
         current_version: 1,
         has_draft: false,
         lock_version: 0,

@@ -16,6 +16,8 @@ pub struct Harness {
     pub name: String,
     /// Optional free-text description shown in harness listings.
     pub description: Option<String>,
+    /// 所属フォルダの ID。`None` は未分類を意味する。
+    pub folder_id: Option<String>,
     /// `version_no` of the board version currently serving as head.
     pub current_version: i64,
     /// Whether the current board contains any draft cell.

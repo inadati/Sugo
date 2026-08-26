@@ -409,6 +409,7 @@ fn row_to_harness(row: &rusqlite::Row) -> rusqlite::Result<Harness> {
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
         description: row.get(7)?,
+        folder_id: None,
     })
 }
 
@@ -494,6 +495,7 @@ mod tests {
             id: id.into(),
             name: "h".into(),
             description: None,
+            folder_id: None,
             current_version,
             has_draft: false,
             lock_version,

@@ -102,6 +102,7 @@ mod helpers {
             id: id.into(),
             name: "h".into(),
             description: None,
+            folder_id: None,
             current_version,
             has_draft: false,
             lock_version,

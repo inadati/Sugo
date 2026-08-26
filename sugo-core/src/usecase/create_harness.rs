@@ -82,6 +82,7 @@ pub async fn create_harness(
         id: clock.new_id(),
         name: input.name,
         description: input.description,
+        folder_id: None,
         current_version: 1,
         has_draft,
         lock_version: 0,
