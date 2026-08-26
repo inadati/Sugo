@@ -6,5 +6,7 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     globals: true,
+    // e2e/ は @playwright/test 用の仕様ファイル。vitest の対象から除外する。
+    exclude: ["**/node_modules/**", "e2e/**"],
   },
 });

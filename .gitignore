@@ -5,6 +5,9 @@
 *.db-wal
 /sugo-gui/node_modules
 /sugo-gui/dist
+/sugo-gui/test-results
+/sugo-gui/playwright-report
+/sugo-gui/*.png
 
 # Harness internal coordination state (chot-harness); never commit.
 /.nipper/
