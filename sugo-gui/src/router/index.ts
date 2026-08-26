@@ -12,6 +12,8 @@ export const router = createRouter({
       component: ShellLayout,
       children: [
         { path: "", component: HarnessList },
+        { path: "uncategorized", component: HarnessList },
+        { path: "folder/:id", component: HarnessList },
         { path: "trash", component: TrashView },
       ],
     },
