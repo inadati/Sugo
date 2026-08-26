@@ -6,6 +6,21 @@ pub struct HarnessSummaryDto {
     pub name: String,
     pub current_version: i64,
     pub has_draft: bool,
+    pub folder_id: Option<String>,
+    pub folder_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FolderDto {
+    pub folder_id: String,
+    pub name: String,
+    pub harness_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteFolderResultDto {
+    pub name: String,
+    pub moved_to_uncategorized: i64,
 }
 
 #[derive(Debug, Serialize)]

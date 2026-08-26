@@ -1,15 +1,32 @@
-use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto, DeleteCellResultDto, DeleteEdgeResultDto, DraftCellDto, EdgeDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
+use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto, DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto, DraftCellDto, EdgeDto, FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::edge::{Edge, Guard};
 use sugo_core::domain::harness::{BoardVersion, Harness};
 use sugo_core::domain::run::RunStatus;
 use sugo_core::error::CoreError;
+use sugo_core::ports::id_clock::IdClock;
 use sugo_core::ports::repository::HarnessRepository;
 use sugo_core::ports::run_repository::RunRepository;
 use sugo_core::usecase::create_harness::{content_hash, default_board};
-use sugo_core::usecase::get_status::get_status;
+use sugo_core::usecase::folder as folder_usecase;
+use sugo_core::usecase::get_status::{get_status, list_harness_summaries};
 use tauri::State;
+
+/// GUI 用の `IdClock` 実装。`create_harness_inner` など既存コマンドが直接
+/// 使っている `uuid::Uuid::new_v4()` / `chrono::Local::now()` と同じ生成方法を
+/// フォルダ系ユースケース（`sugo_core::usecase::folder`）に渡すための薄い橋渡し。
+struct GuiIdClock;
+
+impl IdClock for GuiIdClock {
+    fn new_id(&self) -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn now_iso(&self) -> String {
+        chrono::Local::now().to_rfc3339()
+    }
+}
 
 /// CoreError をフロントが分岐できる安定コード文字列へマップする。
 ///
@@ -28,16 +45,129 @@ fn map_core_error(e: CoreError) -> String {
 pub async fn list_harnesses(
     state: State<'_, AppState>,
 ) -> Result<Vec<HarnessSummaryDto>, String> {
-    let harnesses = state.repo.list().await.map_err(|e| e.to_string())?;
-    Ok(harnesses
+    list_harnesses_inner(state.repo.as_ref()).await
+}
+
+/// `list_harnesses` の実体。repo を直接受け取りテスト可能にする。
+///
+/// `HarnessRepository::list()` ではなく `list_harness_summaries` 経由にする
+/// ことで、folder_id / folder_name の解決（フォルダ一覧を1回引いて id→名前を
+/// マップする処理）を usecase 層に委ねる。
+async fn list_harnesses_inner(
+    repo: &dyn HarnessRepository,
+) -> Result<Vec<HarnessSummaryDto>, String> {
+    let summaries = list_harness_summaries(repo).await.map_err(map_core_error)?;
+    Ok(summaries
         .into_iter()
-        .map(|h| HarnessSummaryDto {
-            harness_id: h.id,
-            name: h.name,
-            current_version: h.current_version,
-            has_draft: h.has_draft,
+        .map(|s| HarnessSummaryDto {
+            harness_id: s.harness_id,
+            name: s.name,
+            current_version: s.current_version,
+            has_draft: s.has_draft,
+            folder_id: s.folder_id,
+            folder_name: s.folder_name,
         })
         .collect())
+}
+
+/// フォルダ一覧取得（サイドバー用、件数バッジ付き）。
+#[tauri::command]
+pub async fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderDto>, String> {
+    list_folders_inner(state.repo.as_ref()).await
+}
+
+async fn list_folders_inner(repo: &dyn HarnessRepository) -> Result<Vec<FolderDto>, String> {
+    let folders = repo.list_folders().await.map_err(map_core_error)?;
+    Ok(folders
+        .into_iter()
+        .map(|(f, count)| FolderDto {
+            folder_id: f.id,
+            name: f.name,
+            harness_count: count,
+        })
+        .collect())
+}
+
+/// フォルダを新規作成する。名前は trim・長さ検証・重複判定を usecase 層で行う。
+#[tauri::command]
+pub async fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderDto, String> {
+    create_folder_inner(state.repo.as_ref(), name).await
+}
+
+async fn create_folder_inner(
+    repo: &dyn HarnessRepository,
+    name: String,
+) -> Result<FolderDto, String> {
+    let folder = folder_usecase::create_folder(repo, &GuiIdClock, &name)
+        .await
+        .map_err(map_core_error)?;
+    Ok(FolderDto {
+        folder_id: folder.id,
+        name: folder.name,
+        harness_count: 0,
+    })
+}
+
+/// フォルダを改名する。
+#[tauri::command]
+pub async fn rename_folder(
+    state: State<'_, AppState>,
+    folder_id: String,
+    name: String,
+) -> Result<(), String> {
+    rename_folder_inner(state.repo.as_ref(), folder_id, name).await
+}
+
+async fn rename_folder_inner(
+    repo: &dyn HarnessRepository,
+    folder_id: String,
+    name: String,
+) -> Result<(), String> {
+    folder_usecase::rename_folder(repo, &GuiIdClock, &folder_id, &name)
+        .await
+        .map_err(map_core_error)
+}
+
+/// フォルダを削除する。所属ハーネスは削除せず未分類に戻す。
+#[tauri::command]
+pub async fn delete_folder(
+    state: State<'_, AppState>,
+    folder_id: String,
+) -> Result<DeleteFolderResultDto, String> {
+    delete_folder_inner(state.repo.as_ref(), folder_id).await
+}
+
+async fn delete_folder_inner(
+    repo: &dyn HarnessRepository,
+    folder_id: String,
+) -> Result<DeleteFolderResultDto, String> {
+    let (name, moved_to_uncategorized) = folder_usecase::delete_folder(repo, &folder_id)
+        .await
+        .map_err(map_core_error)?;
+    Ok(DeleteFolderResultDto {
+        name,
+        moved_to_uncategorized,
+    })
+}
+
+/// ハーネスの所属フォルダを変更する。`folder_id` が `None` なら未分類へ。
+#[tauri::command]
+pub async fn move_harness_to_folder(
+    state: State<'_, AppState>,
+    harness_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    move_harness_to_folder_inner(state.repo.as_ref(), harness_id, folder_id).await
+}
+
+async fn move_harness_to_folder_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    folder_usecase::move_harness_to_folder(repo, &harness_id, folder_id.as_deref())
+        .await
+        .map_err(map_core_error)
 }
 
 /// 新規ハーネスを作成する（v1・default_board）。GUI の一覧画面から手動作成する導線。
@@ -837,7 +967,7 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, purge_harness_inner, rename_cell_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
+    use super::{add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner, list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner, rename_folder_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -1607,5 +1737,80 @@ mod tests {
         purge_harness_inner(&repo, hid.clone()).await.unwrap();
         assert!(repo.list_trash().await.unwrap().is_empty());
         assert!(repo.get(&hid).await.unwrap().is_none());
+    }
+
+    // ── folders（inner を直接実行）───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_folder_inner_creates_and_lists() {
+        let repo = InMemoryHarnessRepository::new();
+        let dto = create_folder_inner(&repo, "  開発  ".into()).await.unwrap();
+        assert_eq!(dto.name, "開発");
+        let listed = list_folders_inner(&repo).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].harness_count, 0);
+    }
+
+    #[tokio::test]
+    async fn create_folder_inner_rejects_duplicate_name() {
+        let repo = InMemoryHarnessRepository::new();
+        create_folder_inner(&repo, "開発".into()).await.unwrap();
+        let err = create_folder_inner(&repo, "開発".into()).await.unwrap_err();
+        assert!(err.contains("既に存在"));
+    }
+
+    #[tokio::test]
+    async fn move_harness_to_folder_inner_moves_and_unsets() {
+        let repo = InMemoryHarnessRepository::new();
+        let f = create_folder_inner(&repo, "開発".into()).await.unwrap();
+        let created = create_harness_inner(&repo, "h".into(), None).await.unwrap();
+
+        move_harness_to_folder_inner(&repo, created.harness_id.clone(), Some(f.folder_id.clone()))
+            .await
+            .unwrap();
+        assert_eq!(list_folders_inner(&repo).await.unwrap()[0].harness_count, 1);
+
+        move_harness_to_folder_inner(&repo, created.harness_id, None).await.unwrap();
+        assert_eq!(list_folders_inner(&repo).await.unwrap()[0].harness_count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_folder_inner_returns_moved_count() {
+        let repo = InMemoryHarnessRepository::new();
+        let f = create_folder_inner(&repo, "開発".into()).await.unwrap();
+        let created = create_harness_inner(&repo, "h".into(), None).await.unwrap();
+        move_harness_to_folder_inner(&repo, created.harness_id, Some(f.folder_id.clone()))
+            .await
+            .unwrap();
+
+        let dto = delete_folder_inner(&repo, f.folder_id).await.unwrap();
+        assert_eq!(dto.name, "開発");
+        assert_eq!(dto.moved_to_uncategorized, 1);
+    }
+
+    #[tokio::test]
+    async fn rename_folder_inner_renames() {
+        let repo = InMemoryHarnessRepository::new();
+        let f = create_folder_inner(&repo, "開発".into()).await.unwrap();
+        rename_folder_inner(&repo, f.folder_id.clone(), "新名称".into())
+            .await
+            .unwrap();
+        let listed = list_folders_inner(&repo).await.unwrap();
+        assert_eq!(listed[0].name, "新名称");
+    }
+
+    #[tokio::test]
+    async fn list_harnesses_inner_carries_folder_info() {
+        let repo = InMemoryHarnessRepository::new();
+        let f = create_folder_inner(&repo, "開発".into()).await.unwrap();
+        let created = create_harness_inner(&repo, "h".into(), None).await.unwrap();
+        move_harness_to_folder_inner(&repo, created.harness_id.clone(), Some(f.folder_id.clone()))
+            .await
+            .unwrap();
+
+        let listed = list_harnesses_inner(&repo).await.unwrap();
+        let dto = listed.iter().find(|h| h.harness_id == created.harness_id).unwrap();
+        assert_eq!(dto.folder_id.as_deref(), Some(f.folder_id.as_str()));
+        assert_eq!(dto.folder_name.as_deref(), Some("開発"));
     }
 }

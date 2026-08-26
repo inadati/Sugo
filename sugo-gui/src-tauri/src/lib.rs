@@ -3,9 +3,10 @@ mod dto;
 mod state;
 
 use commands::{
-    add_cell, add_edge, create_harness, delete_cell, delete_edge, get_active_runs, get_harness,
-    list_harnesses, list_trash, purge_harness, rename_cell, restore_harness, set_cell_memo,
-    trash_harness, update_edge,
+    add_cell, add_edge, create_folder, create_harness, delete_cell, delete_edge, delete_folder,
+    get_active_runs, get_harness, list_folders, list_harnesses, list_trash,
+    move_harness_to_folder, purge_harness, rename_cell, rename_folder, restore_harness,
+    set_cell_memo, trash_harness, update_edge,
 };
 use state::AppState;
 use sugo_core::ports::repository::HarnessRepository;
@@ -46,6 +47,11 @@ pub fn run() {
             restore_harness,
             purge_harness,
             list_trash,
+            list_folders,
+            create_folder,
+            rename_folder,
+            delete_folder,
+            move_harness_to_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
