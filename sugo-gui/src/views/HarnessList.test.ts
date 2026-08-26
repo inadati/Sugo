@@ -163,6 +163,24 @@ describe("HarnessList – スコープ切り替え", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(wrapper.find("h2").text()).toBe("未分類");
   });
+
+  it("存在しない folder_id のスコープではフォールバック文言を見出しに表示する（削除済み等）", async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/folder/:id", component: HarnessList },
+        { path: "/harness/:id", component: { template: "<div/>" } },
+      ],
+    });
+    router.push("/folder/does-not-exist");
+    await router.isReady();
+    const wrapper = mount(HarnessList, { global: { plugins: [router] } });
+    // フォルダ一覧取得（f1 のみ返す）が解決するまで待つ
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.find("h2").text()).toBe("フォルダが見つかりません");
+    expect(wrapper.find("h2").text()).not.toBe("");
+  });
 });
 
 describe("HarnessList – 右クリックでのフォルダ移動が失敗した場合", () => {

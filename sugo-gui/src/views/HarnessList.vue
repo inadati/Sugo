@@ -137,6 +137,10 @@ const route = useRoute();
 const { toast, showToast } = useToast();
 const harnesses = ref<HarnessSummary[]>([]);
 const folders = ref<FolderSummary[]>([]);
+// フォルダ一覧の初回取得が完了したかどうか。未完了中はフォルダスコープの
+// 見出しをまだ確定させず、取得完了後も見つからない場合にのみ
+// 「フォルダが見つかりません」を表示する（初回fetch未完了とフォルダ削除済みを区別する）。
+const foldersLoaded = ref(false);
 const trashTarget = ref<HarnessSummary | null>(null);
 const trashError = ref<string | null>(null);
 const showCreate = ref(false);
@@ -163,7 +167,13 @@ const scopeTitle = computed(() => {
   if (s.kind === "uncategorized") return "未分類";
   if (s.kind === "folder") {
     const f = folders.value.find((f) => f.folder_id === s.folderId);
-    return f?.name ?? "";
+    if (f) return f.name;
+    // フォルダ一覧の初回取得がまだ完了していない場合は、削除済みと確定できない
+    // ため空欄のままにする（一瞬「フォルダが見つかりません」が出るのを防ぐ）。
+    if (!foldersLoaded.value) return "";
+    // 取得は完了しているのに見つからない = 他経路（MCP／別ウィンドウ）で
+    // フォルダが削除された等。見出しを空欄にせず明示的に伝える。
+    return "フォルダが見つかりません";
   }
   return "ハーネス一覧";
 });
@@ -181,6 +191,7 @@ async function fetchHarnesses() {
 
 async function fetchFolders() {
   folders.value = await invoke<FolderSummary[]>("list_folders");
+  foldersLoaded.value = true;
 }
 
 function onCreated(harnessId: string) {
