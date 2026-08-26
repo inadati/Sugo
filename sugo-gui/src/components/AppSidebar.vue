@@ -89,6 +89,7 @@
       mode="create"
       @close="showCreateDialog = false"
       @saved="showCreateDialog = false; fetchFolders()"
+      @not-found="showCreateDialog = false; onFolderNotFound()"
     />
     <FolderNameDialog
       v-if="renameTarget"
@@ -97,6 +98,7 @@
       :initial-name="renameTarget.name"
       @close="renameTarget = null"
       @saved="renameTarget = null; fetchFolders()"
+      @not-found="renameTarget = null; onFolderNotFound()"
     />
 
     <!-- トースト -->
@@ -157,6 +159,15 @@ async function fetchFolders() {
 
 function openRename(f: FolderSummary) {
   renameTarget.value = f;
+}
+
+/**
+ * FolderNameDialog（作成・改名）から NotFound を通知された際の共通処理。
+ * design.md のエラー処理表どおり、トースト通知＋一覧再取得を行う。
+ */
+async function onFolderNotFound() {
+  showToast("フォルダが見つかりません。一覧を更新しました。");
+  await fetchFolders();
 }
 
 async function doDeleteFolder(f: FolderSummary) {

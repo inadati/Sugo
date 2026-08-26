@@ -72,6 +72,27 @@ describe("HarnessView", () => {
     expect(wrapper.find('[data-testid="edge-delete"]').exists()).toBe(false);
   });
 
+  it("エラー時にトーストを表示し3秒後に自動的に消える（useToastへの移行を確認）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.useFakeTimers();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("cannot_delete_start"));
+    wrapper.findComponent({ name: "BoardGraph" }).vm.$emit("node-delete", "c1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wrapper.get('[data-testid="toast"]').text()).toContain("START マスは削除できません");
+
+    await vi.advanceTimersByTimeAsync(3000);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="toast"]').exists()).toBe(false);
+
+    vi.useRealTimers();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
   it("reloads detail when polled current_version changes", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.useFakeTimers();

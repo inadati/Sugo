@@ -48,11 +48,23 @@ const props = defineProps<{
   folderId?: string;
   initialName?: string;
 }>();
-const emit = defineEmits<{ close: []; saved: [] }>();
+const emit = defineEmits<{ close: []; saved: []; "not-found": [] }>();
 
 const name = ref(props.initialName ?? "");
 const errorMsg = ref("");
 const submitting = ref(false);
+
+/**
+ * invoke() の reject メッセージから NotFound（存在しない folder_id、改名中に
+ * 別クライアント/MCPから削除された等）を判定する。AppSidebar.vue の
+ * isNotFoundError と同じ基準（"not found" の部分一致）で判定する。
+ * design.md のエラー処理表どおり、NotFound はダイアログ内表示ではなく
+ * 呼び出し元のトースト通知＋一覧再取得に振り分ける（Validation/Conflict は
+ * 引き続きダイアログ内表示のまま維持する）。
+ */
+function isNotFoundError(e: unknown): boolean {
+  return String(e).includes("not found");
+}
 
 async function submit() {
   if (submitting.value) return;
@@ -71,6 +83,10 @@ async function submit() {
     }
     emit("saved");
   } catch (e: unknown) {
+    if (isNotFoundError(e)) {
+      emit("not-found");
+      return;
+    }
     errorMsg.value = String(e);
   } finally {
     submitting.value = false;

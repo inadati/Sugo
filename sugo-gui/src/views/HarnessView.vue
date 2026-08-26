@@ -18,7 +18,11 @@
     </div>
 
     <!-- トースト -->
-    <div v-if="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded shadow">{{ toast }}</div>
+    <div
+      v-if="toast"
+      data-testid="toast"
+      class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded shadow"
+    >{{ toast }}</div>
 
     <!-- 盤面グラフ -->
     <BoardGraph
@@ -91,6 +95,7 @@ import BoardGraph from "../components/BoardGraph.vue";
 import AddCellDialog from "../components/AddCellDialog.vue";
 import CellDetailPanel from "../components/CellDetailPanel.vue";
 import EdgeEditor from "../components/EdgeEditor.vue";
+import { useToast } from "../composables/useToast";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -132,16 +137,11 @@ const showAddCell = ref(false);
 const selectedCellId = ref<string | null>(null);
 const activeRuns = ref<ActiveRun[]>([]);
 const edgeEditor = ref<EdgeEditorState | null>(null);
-const toast = ref("");
+const { toast, showToast } = useToast();
 
 const selectedCell = computed<Cell | null>(
   () => detail.value?.cells.find((c) => c.id === selectedCellId.value) ?? null
 );
-
-function showToast(msg: string) {
-  toast.value = msg;
-  setTimeout(() => { if (toast.value === msg) toast.value = ""; }, 3000);
-}
 
 function handleMutationError(e: unknown) {
   const msg = String(e);

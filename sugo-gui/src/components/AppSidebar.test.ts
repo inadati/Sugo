@@ -153,3 +153,42 @@ describe("AppSidebar – フォルダ削除の異常系と遷移", () => {
     expect(router.currentRoute.value.path).toBe("/folder/f2");
   });
 });
+
+describe("AppSidebar – フォルダ改名の異常系", () => {
+  it("改名対象が削除済み(NotFound)の場合はダイアログを閉じてトースト表示し一覧を再取得する", async () => {
+    const router = makeRouter();
+    const wrapper = mount(AppSidebar, { global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+    const callsBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_folders").length;
+
+    await wrapper.get('[data-testid="rename-folder-btn"]').trigger("click");
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("not found: f1")));
+    await wrapper.get('[data-testid="folder-name"]').setValue("開発2");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ダイアログが閉じている（エラー文字列をダイアログ内には表示しない）
+    expect(wrapper.find('[data-testid="folder-name"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("見つかりません");
+    const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_folders").length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+  });
+
+  it("バリデーション/重複エラーの場合はダイアログを開いたまま再入力できる", async () => {
+    const router = makeRouter();
+    const wrapper = mount(AppSidebar, { global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.get('[data-testid="rename-folder-btn"]').trigger("click");
+    vi.mocked(invoke).mockImplementationOnce(() =>
+      Promise.reject(new Error("conflict: フォルダ「調査」は既に存在します"))
+    );
+    await wrapper.get('[data-testid="folder-name"]').setValue("調査");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ダイアログは閉じずに残り、エラーはダイアログ内に表示される
+    expect(wrapper.find('[data-testid="folder-name"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("既に存在");
+  });
+});

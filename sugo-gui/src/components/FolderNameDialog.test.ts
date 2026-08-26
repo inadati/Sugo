@@ -61,4 +61,31 @@ describe("FolderNameDialog", () => {
     await wrapper.get('[data-testid="folder-cancel"]').trigger("click");
     expect(wrapper.emitted("close")).toBeTruthy();
   });
+
+  it("NotFound（対象フォルダが削除済み）の場合はダイアログ内表示ではなくnot-foundイベントを発火する", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("not found: f1"));
+    const wrapper = mount(FolderNameDialog, {
+      props: { mode: "rename", folderId: "f1", initialName: "開発" },
+    });
+    await wrapper.get('[data-testid="folder-name"]').setValue("開発2");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.emitted("not-found")).toBeTruthy();
+    // NotFoundは呼び出し元がトースト+一覧再取得で扱うため、ダイアログ内には
+    // 生のエラー文字列を表示しない。
+    expect(wrapper.text()).not.toContain("not found");
+  });
+
+  it("Conflict（同名フォルダ）はNotFoundと違いダイアログ内に表示し、not-foundは発火しない", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("conflict: フォルダ「開発」は既に存在します"));
+    const wrapper = mount(FolderNameDialog, {
+      props: { mode: "rename", folderId: "f1", initialName: "旧" },
+    });
+    await wrapper.get('[data-testid="folder-name"]').setValue("開発");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.text()).toContain("既に存在");
+    expect(wrapper.emitted("not-found")).toBeUndefined();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
 });
