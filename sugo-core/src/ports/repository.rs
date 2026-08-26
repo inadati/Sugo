@@ -5,6 +5,7 @@
 //! (in-memory fake here, SQLite in `sugo-infra`) implement this trait and must
 //! satisfy the shared contract in [`crate::contract`].
 
+use crate::domain::folder::Folder;
 use crate::domain::harness::{BoardVersion, Harness};
 use crate::error::CoreError;
 use async_trait::async_trait;
@@ -67,6 +68,31 @@ pub trait HarnessRepository: Send + Sync {
     async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError>;
     /// ハーネスの説明文を更新する（description カラムのみ更新、ボードバージョンは変更しない）。
     async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError>;
+
+    /// フォルダ一覧を返す。各要素は `(フォルダ, 所属する未削除ハーネスの件数)`。
+    /// `sort_order` の昇順で返すこと。
+    async fn list_folders(&self) -> Result<Vec<(Folder, i64)>, CoreError>;
+    /// フォルダを1件追加する。同一 id が既に存在する場合は `CoreError::Storage`。
+    /// 名前の重複判定は usecase 層の責務であり、ここでは行わない。
+    async fn create_folder(&self, folder: &Folder) -> Result<(), CoreError>;
+    /// フォルダ名を更新する。`id` が存在しない場合は `CoreError::NotFound`。
+    async fn rename_folder(
+        &self,
+        id: &str,
+        name: &str,
+        updated_at: &str,
+    ) -> Result<(), CoreError>;
+    /// フォルダを削除する。所属ハーネスの `folder_id` を NULL に戻してから
+    /// フォルダ行を削除する（単一トランザクション）。ハーネスは削除しない。
+    /// `id` が存在しない場合は `CoreError::NotFound`。
+    async fn delete_folder(&self, id: &str) -> Result<(), CoreError>;
+    /// ハーネスの所属フォルダを変更する。`folder_id` が `None` なら未分類へ。
+    /// ハーネスまたはフォルダが存在しない場合は `CoreError::NotFound`。
+    async fn move_harness_to_folder(
+        &self,
+        harness_id: &str,
+        folder_id: Option<&str>,
+    ) -> Result<(), CoreError>;
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -124,6 +150,7 @@ pub mod fake {
         harnesses: Mutex<HashMap<String, Harness>>,
         versions: Mutex<HashMap<(String, i64), BoardVersion>>,
         deleted_at: Mutex<HashMap<String, String>>,
+        folders: Mutex<HashMap<String, Folder>>,
     }
     impl InMemoryHarnessRepository {
         /// Create an empty in-memory repository.
@@ -296,5 +323,194 @@ pub mod fake {
             h.description = description.map(|s| s.to_string());
             Ok(())
         }
+
+        async fn list_folders(&self) -> Result<Vec<(Folder, i64)>, CoreError> {
+            let folders = self.folders.lock().unwrap();
+            let hs = self.harnesses.lock().unwrap();
+            let deleted = self.deleted_at.lock().unwrap();
+            let mut out: Vec<(Folder, i64)> = folders
+                .values()
+                .map(|f| {
+                    let count = hs
+                        .values()
+                        .filter(|h| {
+                            h.folder_id.as_deref() == Some(f.id.as_str())
+                                && !deleted.contains_key(&h.id)
+                        })
+                        .count() as i64;
+                    (f.clone(), count)
+                })
+                .collect();
+            out.sort_by(|a, b| {
+                a.0.sort_order
+                    .cmp(&b.0.sort_order)
+                    .then_with(|| a.0.created_at.cmp(&b.0.created_at))
+            });
+            Ok(out)
+        }
+
+        async fn create_folder(&self, folder: &Folder) -> Result<(), CoreError> {
+            let mut folders = self.folders.lock().unwrap();
+            if folders.contains_key(&folder.id) {
+                return Err(CoreError::Storage(format!(
+                    "duplicate folder id: {}",
+                    folder.id
+                )));
+            }
+            folders.insert(folder.id.clone(), folder.clone());
+            Ok(())
+        }
+
+        async fn rename_folder(
+            &self,
+            id: &str,
+            name: &str,
+            updated_at: &str,
+        ) -> Result<(), CoreError> {
+            let mut folders = self.folders.lock().unwrap();
+            let f = folders
+                .get_mut(id)
+                .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+            f.name = name.to_string();
+            f.updated_at = updated_at.to_string();
+            Ok(())
+        }
+
+        async fn delete_folder(&self, id: &str) -> Result<(), CoreError> {
+            let mut folders = self.folders.lock().unwrap();
+            if !folders.contains_key(id) {
+                return Err(CoreError::NotFound(id.to_string()));
+            }
+            let mut hs = self.harnesses.lock().unwrap();
+            for h in hs.values_mut() {
+                if h.folder_id.as_deref() == Some(id) {
+                    h.folder_id = None;
+                }
+            }
+            folders.remove(id);
+            Ok(())
+        }
+
+        async fn move_harness_to_folder(
+            &self,
+            harness_id: &str,
+            folder_id: Option<&str>,
+        ) -> Result<(), CoreError> {
+            if let Some(fid) = folder_id {
+                let folders = self.folders.lock().unwrap();
+                if !folders.contains_key(fid) {
+                    return Err(CoreError::NotFound(fid.to_string()));
+                }
+            }
+            let mut hs = self.harnesses.lock().unwrap();
+            let h = hs
+                .get_mut(harness_id)
+                .ok_or_else(|| CoreError::NotFound(harness_id.to_string()))?;
+            h.folder_id = folder_id.map(|s| s.to_string());
+            Ok(())
+        }
+    }
+
+    /// テスト用の最小ハーネスとその v1 ボードバージョン。
+    pub fn sample_harness(id: &str) -> (Harness, BoardVersion) {
+        use crate::domain::board::BoardDefinition;
+        use crate::domain::cell::{Cell, CellStatus};
+        let def = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![Cell {
+                id: "c1".into(),
+                name: "c1".into(),
+                prompt: "p".into(),
+                status: CellStatus::Active,
+                terminal: true,
+                request_memo: String::new(),
+            }],
+            edges: vec![],
+        };
+        (
+            Harness {
+                id: id.into(),
+                name: "h".into(),
+                description: None,
+                folder_id: None,
+                current_version: 1,
+                has_draft: false,
+                lock_version: 0,
+                created_at: "t".into(),
+                updated_at: "t".into(),
+            },
+            BoardVersion {
+                id: format!("v-{id}"),
+                harness_id: id.into(),
+                version_no: 1,
+                definition: def,
+                content_hash: "hash".into(),
+                created_at: "t".into(),
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+mod fake_tests {
+    use super::fake::InMemoryHarnessRepository;
+    use super::*;
+    use crate::domain::folder::Folder;
+
+    fn folder(id: &str, name: &str, order: i64) -> Folder {
+        Folder {
+            id: id.into(),
+            name: name.into(),
+            parent_id: None,
+            sort_order: order,
+            created_at: "2026-08-26T00:00:00+09:00".into(),
+            updated_at: "2026-08-26T00:00:00+09:00".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_and_list_folders() {
+        let repo = InMemoryHarnessRepository::new();
+        repo.create_folder(&folder("f1", "開発", 0)).await.unwrap();
+        let listed = repo.list_folders().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0.name, "開発");
+        assert_eq!(listed[0].1, 0, "空フォルダの件数は 0");
+    }
+
+    #[tokio::test]
+    async fn delete_folder_moves_harnesses_to_uncategorized() {
+        let repo = InMemoryHarnessRepository::new();
+        repo.create_folder(&folder("f1", "開発", 0)).await.unwrap();
+        // ハーネスを1件作って f1 に入れる
+        let (h, v) = super::fake::sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
+        assert_eq!(repo.list_folders().await.unwrap()[0].1, 1);
+
+        repo.delete_folder("f1").await.unwrap();
+
+        assert!(repo.list_folders().await.unwrap().is_empty());
+        let listed = repo.list().await.unwrap();
+        assert_eq!(listed.len(), 1, "ハーネスは削除されない");
+        assert!(listed[0].folder_id.is_none(), "未分類に戻る");
+    }
+
+    #[tokio::test]
+    async fn rename_folder_unknown_id_is_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = repo
+            .rename_folder("ghost", "新名称", "2026-08-26T00:00:00+09:00")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn move_harness_unknown_id_is_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = repo.move_harness_to_folder("ghost", None).await.unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
     }
 }
