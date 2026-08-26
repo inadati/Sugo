@@ -22,6 +22,7 @@ fn code_for(e: &CoreError) -> &'static str {
         CoreError::DraftCellsExist => "draft_cells_exist",
         CoreError::RunNotRunning => "run_not_running",
         CoreError::ActiveRunExists => "active_run",
+        CoreError::Conflict(_) => "conflict",
     }
 }
 
@@ -177,6 +178,13 @@ mod tests {
     fn nipper_token_permission_denied_maps_code() {
         let e = nipper_outcome_error(NipperOutcome::TokenPermissionDenied).unwrap();
         assert_eq!(code_of(&e), "token_permission_denied");
+    }
+
+    #[test]
+    fn maps_conflict_code() {
+        let e = to_tool_error(CoreError::Conflict("dup".into()));
+        assert_eq!(code_of(&e), "conflict");
+        assert!(e.message.contains("dup"));
     }
 
     #[test]

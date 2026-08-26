@@ -37,6 +37,11 @@ pub enum CoreError {
     /// A persistence-layer failure surfaced from an adapter.
     #[error("storage error: {0}")]
     Storage(String),
+    /// A uniqueness constraint enforced by a usecase was violated (e.g. a
+    /// folder name that already exists). Distinct from `Validation`, which
+    /// carries structural board issues.
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 #[cfg(test)]
@@ -59,5 +64,11 @@ mod tests {
     fn run_not_running_message() {
         let e = CoreError::RunNotRunning;
         assert_eq!(e.to_string(), "run is not running");
+    }
+
+    #[test]
+    fn conflict_message() {
+        let e = CoreError::Conflict("folder name already exists: 開発".into());
+        assert_eq!(e.to_string(), "conflict: folder name already exists: 開発");
     }
 }
