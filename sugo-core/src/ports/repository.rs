@@ -498,6 +498,42 @@ mod fake_tests {
     }
 
     #[tokio::test]
+    async fn delete_folder_nulls_folder_id_of_trashed_harness() {
+        // Regression guard for design.md L76: deleting a folder must null out
+        // folder_id even for a harness that is currently in the trash, not
+        // just live ones — otherwise a later restore would resurrect a
+        // harness pointing at a folder that no longer exists.
+        let repo = InMemoryHarnessRepository::new();
+        repo.create_folder(&folder("f1", "開発", 0)).await.unwrap();
+        let (h, v) = super::fake::sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+
+        // Sanity: the trashed harness is still fetchable and still points at
+        // f1 before the folder is deleted.
+        let (fetched, _) = repo
+            .get("h1")
+            .await
+            .unwrap()
+            .expect("trashed harness must still be fetchable via get()");
+        assert_eq!(fetched.folder_id.as_deref(), Some("f1"));
+
+        repo.delete_folder("f1").await.unwrap();
+
+        let (fetched, _) = repo
+            .get("h1")
+            .await
+            .unwrap()
+            .expect("trashed harness must still be fetchable after delete_folder");
+        assert!(
+            fetched.folder_id.is_none(),
+            "trashed harness's folder_id must be nulled by delete_folder, got {:?}",
+            fetched.folder_id
+        );
+    }
+
+    #[tokio::test]
     async fn rename_folder_unknown_id_is_not_found() {
         let repo = InMemoryHarnessRepository::new();
         let err = repo

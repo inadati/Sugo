@@ -800,6 +800,72 @@ mod tests {
         assert_eq!(listed[1].0.name, "後");
     }
 
+    /// Regression guard for design.md L76: deleting a folder must null out
+    /// `folder_id` even for harnesses that are currently in the trash, not
+    /// just live ones. Otherwise a later restore would resurrect a harness
+    /// pointing at a folder that no longer exists. `list()`/`get()` both
+    /// filter out trashed rows, so the row is inspected directly via the raw
+    /// connection (`list_trash()` confirms the harness stays trashed
+    /// throughout).
+    #[tokio::test]
+    async fn delete_folder_nulls_folder_id_of_trashed_harness() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        let f = Folder {
+            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            created_at: "2026-08-26T00:00:00+09:00".into(),
+            updated_at: "2026-08-26T00:00:00+09:00".into(),
+        };
+        repo.create_folder(&f).await.unwrap();
+        let (h, v) = (harness("h1", 1, 0), version("v1", "h1", 1, "p"));
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+
+        // Sanity: the harness is still visible in the trash and still points
+        // at f1 at the raw-row level before the folder is deleted.
+        assert_eq!(
+            repo.list_trash().await.unwrap().len(),
+            1,
+            "harness must be fetchable from the trash before delete_folder"
+        );
+        let folder_id_before: Option<String> = repo
+            .lock()
+            .query_row("SELECT folder_id FROM harnesses WHERE id = 'h1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(folder_id_before.as_deref(), Some("f1"));
+
+        repo.delete_folder("f1").await.unwrap();
+
+        // Still trashed (the folder delete must not resurrect it)...
+        assert_eq!(
+            repo.list_trash().await.unwrap().len(),
+            1,
+            "trashed harness must remain trashed after delete_folder"
+        );
+        // ...but its folder_id has been nulled, matching the trashed harness
+        // to design.md's requirement that folder deletion clears folder_id
+        // even for harnesses that are in the trash.
+        let folder_id_after: Option<String> = repo
+            .lock()
+            .query_row("SELECT folder_id FROM harnesses WHERE id = 'h1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            folder_id_after.is_none(),
+            "trashed harness's folder_id must be NULL after delete_folder, got {folder_id_after:?}"
+        );
+
+        // Restoring afterwards must land it in Uncategorized rather than a
+        // dangling reference to the deleted folder.
+        repo.restore_harness("h1").await.unwrap();
+        let hs = repo.list().await.unwrap();
+        assert_eq!(hs.len(), 1);
+        assert!(hs[0].folder_id.is_none());
+    }
+
     /// Poisoning the connection mutex (by panicking while the guard is held)
     /// must not permanently brick the repository: a later `lock()` recovers the
     /// inner guard and a real query through the recovered connection succeeds.
