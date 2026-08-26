@@ -14,10 +14,26 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Embedded W3C WebDriver server (WKWebView-native on macOS), used only by
+    // the `wdio-webdriver` E2E suite (see sugo-gui/e2e-wdio/). Gated behind
+    // the `webdriver` Cargo feature (opt-in via `--features webdriver`) so it
+    // is never linked into a normal release build: it exposes an automation
+    // HTTP endpoint on localhost and must not ship to users.
+    #[cfg(feature = "webdriver")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .setup(|app| {
-            let db_path =
-                sugo_infra::paths::default_db_path().expect("resolve db path");
+            // `SUGO_DB` lets tooling (E2E tests, sugo-mcp) point the app at an
+            // isolated DB file instead of the shared `~/.sugo/sugo.db`. Mirrors
+            // the same override in sugo-mcp/src/main.rs so the two processes
+            // agree on how to find a non-default DB during testing.
+            let db_path = match std::env::var("SUGO_DB") {
+                Ok(p) => std::path::PathBuf::from(p),
+                Err(_) => sugo_infra::paths::default_db_path().expect("resolve db path"),
+            };
             let state = AppState::new(db_path.to_str().unwrap()).expect("init db");
 
             // 180日を超えてゴミ箱に入ったハーネスを起動時に自動パージ

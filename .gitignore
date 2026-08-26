@@ -8,6 +8,8 @@
 /sugo-gui/test-results
 /sugo-gui/playwright-report
 /sugo-gui/*.png
+/sugo-gui/logs
+/sugo-gui/e2e-wdio/*.png
 
 # Harness internal coordination state (chot-harness); never commit.
 /.nipper/

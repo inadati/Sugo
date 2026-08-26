@@ -19,6 +19,22 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
 
+[dependencies.tauri-plugin-wdio-webdriver]
+# Embedded W3C WebDriver server used only by the `wdio-webdriver` E2E suite
+# (sugo-gui/e2e-wdio/). `optional = true` plus the `webdriver` feature below
+# is the mechanism the plugin's own docs recommend for keeping it out of
+# release builds: `cfg(debug_assertions)` in `[target.'cfg(...)']` is NOT a
+# valid Cargo target predicate (debug_assertions is a compile-time cfg, not
+# a target cfg) and would silently link the plugin into every build,
+# including release, defeating the point. A Cargo feature is the only
+# mechanism that actually excludes it unless explicitly requested via
+# `--features webdriver`.
+version = "1"
+optional = true
+
+[features]
+webdriver = ["dep:tauri-plugin-wdio-webdriver"]
+
 [build-dependencies]
 tauri-build = { workspace = true }
 
