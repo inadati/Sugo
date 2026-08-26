@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension};
 use std::sync::Mutex;
 use sugo_core::domain::board::BoardDefinition;
+use sugo_core::domain::folder::Folder;
 use sugo_core::domain::harness::{BoardVersion, Harness};
 use sugo_core::error::CoreError;
 use sugo_core::ports::repository::HarnessRepository;
@@ -138,6 +139,23 @@ impl SqliteHarnessRepository {
             )
             .map_err(map_err)?;
         }
+        // Idempotent migration for folder_id (harness folders, added 2026-08).
+        let has_folder_id: bool = conn
+            .prepare("PRAGMA table_info(harnesses)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "folder_id"))
+            })
+            .map_err(map_err)?;
+        if !has_folder_id {
+            conn.execute(
+                "ALTER TABLE harnesses ADD COLUMN folder_id TEXT REFERENCES folders(id)",
+                [],
+            )
+            .map_err(map_err)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -187,7 +205,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description \
+                "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description,folder_id \
                  FROM harnesses WHERE deleted_at IS NULL",
             )
             .map_err(map_err)?;
@@ -369,11 +387,127 @@ impl HarnessRepository for SqliteHarnessRepository {
             Ok(())
         }
     }
+
+    async fn list_folders(&self) -> Result<Vec<(Folder, i64)>, CoreError> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id, f.name, f.parent_id, f.sort_order, f.created_at, f.updated_at, \
+                        (SELECT COUNT(*) FROM harnesses h \
+                          WHERE h.folder_id = f.id AND h.deleted_at IS NULL) \
+                 FROM folders f ORDER BY f.sort_order ASC, f.created_at ASC",
+            )
+            .map_err(map_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    Folder {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        parent_id: row.get(2)?,
+                        sort_order: row.get(3)?,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    },
+                    row.get(6)?,
+                ))
+            })
+            .map_err(map_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_err)?;
+        Ok(rows)
+    }
+
+    async fn create_folder(&self, folder: &Folder) -> Result<(), CoreError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO folders (id,name,parent_id,sort_order,created_at,updated_at) \
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![
+                folder.id,
+                folder.name,
+                folder.parent_id,
+                folder.sort_order,
+                folder.created_at,
+                folder.updated_at
+            ],
+        )
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn rename_folder(
+        &self,
+        id: &str,
+        name: &str,
+        updated_at: &str,
+    ) -> Result<(), CoreError> {
+        let conn = self.lock();
+        let n = conn
+            .execute(
+                "UPDATE folders SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![name, updated_at, id],
+            )
+            .map_err(map_err)?;
+        if n == 0 {
+            return Err(CoreError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn delete_folder(&self, id: &str) -> Result<(), CoreError> {
+        let mut conn = self.lock();
+        // 所属ハーネスの folder_id を NULL に戻してからフォルダ行を消す。
+        // 途中失敗で存在しないフォルダを指したままのハーネスが残らないよう
+        // 単一トランザクションで行う。ゴミ箱内のハーネスも対象に含める。
+        let tx = conn.transaction().map_err(map_err)?;
+        tx.execute(
+            "UPDATE harnesses SET folder_id = NULL WHERE folder_id = ?1",
+            [id],
+        )
+        .map_err(map_err)?;
+        let n = tx
+            .execute("DELETE FROM folders WHERE id = ?1", [id])
+            .map_err(map_err)?;
+        if n == 0 {
+            return Err(CoreError::NotFound(id.to_string()));
+        }
+        tx.commit().map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn move_harness_to_folder(
+        &self,
+        harness_id: &str,
+        folder_id: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let conn = self.lock();
+        if let Some(fid) = folder_id {
+            let exists: bool = conn
+                .query_row("SELECT 1 FROM folders WHERE id = ?1", [fid], |_| Ok(true))
+                .optional()
+                .map_err(map_err)?
+                .unwrap_or(false);
+            if !exists {
+                return Err(CoreError::NotFound(fid.to_string()));
+            }
+        }
+        let n = conn
+            .execute(
+                "UPDATE harnesses SET folder_id = ?1 WHERE id = ?2",
+                rusqlite::params![folder_id, harness_id],
+            )
+            .map_err(map_err)?;
+        if n == 0 {
+            return Err(CoreError::NotFound(harness_id.to_string()));
+        }
+        Ok(())
+    }
 }
 
 fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
     conn.execute(
-        "INSERT INTO harnesses (id,name,current_version,has_draft,lock_version,created_at,updated_at,description) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO harnesses (id,name,current_version,has_draft,lock_version,created_at,updated_at,description,folder_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         rusqlite::params![
             h.id,
             h.name,
@@ -382,7 +516,8 @@ fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
             h.lock_version,
             h.created_at,
             h.updated_at,
-            h.description
+            h.description,
+            h.folder_id
         ],
     )
     .map_err(map_err)?;
@@ -409,13 +544,13 @@ fn row_to_harness(row: &rusqlite::Row) -> rusqlite::Result<Harness> {
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
         description: row.get(7)?,
-        folder_id: None,
+        folder_id: row.get(8)?,
     })
 }
 
 fn select_harness(conn: &Connection, id: &str) -> Result<Option<Harness>, CoreError> {
     conn.query_row(
-        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
+        "SELECT id,name,current_version,has_draft,lock_version,created_at,updated_at,description,folder_id FROM harnesses WHERE id=?1 AND deleted_at IS NULL",
         [id],
         row_to_harness,
     )
@@ -544,6 +679,125 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn folder_id_migration_is_idempotent_on_legacy_db() {
+        // folder_id を持たない旧DBを手で組み立て、open が2回とも成功することを確認する。
+        let dir = temp_dir("folder-migration");
+        let path = dir.join("legacy.db");
+        let path_str = path.to_str().unwrap();
+        {
+            let conn = rusqlite::Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE harnesses (
+                   id TEXT PRIMARY KEY, name TEXT NOT NULL, current_version INTEGER NOT NULL,
+                   has_draft INTEGER NOT NULL, lock_version INTEGER NOT NULL,
+                   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        SqliteHarnessRepository::open(path_str).expect("1回目の open");
+        SqliteHarnessRepository::open(path_str).expect("2回目の open（冪等）");
+
+        let conn = rusqlite::Connection::open(path_str).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(harnesses)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "folder_id"));
+    }
+
+    #[test]
+    fn folders_table_exists_on_fresh_db() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        let conn = repo.lock();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='folders'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_folder_is_transactional_and_keeps_harnesses() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        let f = Folder {
+            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            created_at: "2026-08-26T00:00:00+09:00".into(),
+            updated_at: "2026-08-26T00:00:00+09:00".into(),
+        };
+        repo.create_folder(&f).await.unwrap();
+        let (h, v) = (harness("h1", 1, 0), version("v1", "h1", 1, "p"));
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
+
+        repo.delete_folder("f1").await.unwrap();
+
+        assert!(repo.list_folders().await.unwrap().is_empty());
+        let hs = repo.list().await.unwrap();
+        assert_eq!(hs.len(), 1);
+        assert!(hs[0].folder_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_folders_counts_exclude_trashed_harnesses() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        let f = Folder {
+            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            created_at: "2026-08-26T00:00:00+09:00".into(),
+            updated_at: "2026-08-26T00:00:00+09:00".into(),
+        };
+        repo.create_folder(&f).await.unwrap();
+        for id in ["h1", "h2"] {
+            let (h, v) = (harness(id, 1, 0), version(&format!("v-{id}"), id, 1, "p"));
+            repo.create(&h, &v).await.unwrap();
+            repo.move_harness_to_folder(id, Some("f1")).await.unwrap();
+        }
+        repo.trash_harness("h2", "2026-08-26T10:00:00+09:00").await.unwrap();
+
+        assert_eq!(repo.list_folders().await.unwrap()[0].1, 1);
+    }
+
+    #[tokio::test]
+    async fn trashed_harness_keeps_folder_and_restores_into_it() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        let f = Folder {
+            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            created_at: "2026-08-26T00:00:00+09:00".into(),
+            updated_at: "2026-08-26T00:00:00+09:00".into(),
+        };
+        repo.create_folder(&f).await.unwrap();
+        let (h, v) = (harness("h1", 1, 0), version("v1", "h1", 1, "p"));
+        repo.create(&h, &v).await.unwrap();
+        repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+        repo.restore_harness("h1").await.unwrap();
+
+        let hs = repo.list().await.unwrap();
+        assert_eq!(hs[0].folder_id.as_deref(), Some("f1"));
+    }
+
+    #[tokio::test]
+    async fn list_folders_is_ordered_by_sort_order() {
+        let repo = SqliteHarnessRepository::in_memory().unwrap();
+        for (id, name, order) in [("f2", "後", 1), ("f1", "先", 0)] {
+            repo.create_folder(&Folder {
+                id: id.into(), name: name.into(), parent_id: None, sort_order: order,
+                created_at: "2026-08-26T00:00:00+09:00".into(),
+                updated_at: "2026-08-26T00:00:00+09:00".into(),
+            })
+            .await
+            .unwrap();
+        }
+        let listed = repo.list_folders().await.unwrap();
+        assert_eq!(listed[0].0.name, "先");
+        assert_eq!(listed[1].0.name, "後");
     }
 
     /// Poisoning the connection mutex (by panicking while the guard is held)

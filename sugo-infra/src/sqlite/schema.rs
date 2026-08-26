@@ -13,10 +13,19 @@
 /// `UNIQUE(harness_id, version_no)` constraint guarantees board-version
 /// immutability by rejecting silent overwrites of an existing version number.
 pub const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS folders (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  parent_id  TEXT REFERENCES folders(id),
+  sort_order INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS harnesses (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
   description     TEXT,
+  folder_id       TEXT REFERENCES folders(id),
   current_version INTEGER NOT NULL,
   has_draft       INTEGER NOT NULL,
   lock_version    INTEGER NOT NULL,
