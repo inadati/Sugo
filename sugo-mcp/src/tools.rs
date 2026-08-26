@@ -196,6 +196,39 @@ pub struct UpdateArgs {
     pub cell_remove: Vec<String>,
 }
 
+/// Arguments for `sugo_create_folder`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateFolderArgs {
+    /// Display name of the new folder (trimmed; 1-64 characters).
+    pub name: String,
+}
+
+/// Arguments for `sugo_rename_folder`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenameFolderArgs {
+    /// Target folder id.
+    pub folder_id: String,
+    /// New display name.
+    pub name: String,
+}
+
+/// Arguments for `sugo_delete_folder`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteFolderArgs {
+    /// Target folder id.
+    pub folder_id: String,
+}
+
+/// Arguments for `sugo_move_harness`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MoveHarnessArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// Destination folder id. Pass null to move the harness to Uncategorized.
+    #[serde(default)]
+    pub folder_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

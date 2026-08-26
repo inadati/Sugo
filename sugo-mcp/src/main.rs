@@ -206,6 +206,8 @@ impl SugoServer {
                             "description": s.description,
                             "current_version": s.current_version,
                             "has_draft": s.has_draft,
+                            "folder_id": s.folder_id,
+                            "folder_name": s.folder_name,
                         })
                     })
                     .collect();
@@ -659,6 +661,126 @@ impl SugoServer {
             payload.to_string(),
         )]))
     }
+
+    /// List all harness folders with their harness counts.
+    #[tool(
+        description = "List all harness folders, ordered by sort_order. Returns \
+        { folders: [{ folder_id, name, harness_count }] }. harness_count excludes \
+        trashed harnesses. Harnesses in no folder are Uncategorized and are not \
+        represented by a folder entry here."
+    )]
+    async fn sugo_list_folders(&self) -> Result<CallToolResult, ErrorData> {
+        let folders = self.repo.list_folders().await.map_err(error::to_tool_error)?;
+        let payload = serde_json::json!({
+            "folders": folders
+                .into_iter()
+                .map(|(f, count)| serde_json::json!({
+                    "folder_id": f.id,
+                    "name": f.name,
+                    "harness_count": count,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Create a new harness folder.
+    #[tool(
+        description = "Create a harness folder. The name is trimmed and must be \
+        1-64 characters and not already used by another folder (a conflict error \
+        code is returned otherwise). Folders are flat; nesting is not supported. \
+        Returns { folder_id, name }."
+    )]
+    async fn sugo_create_folder(
+        &self,
+        Parameters(args): Parameters<tools::CreateFolderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::folder::create_folder;
+
+        let folder = create_folder(self.repo.as_ref(), self.clock.as_ref(), &args.name)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({ "folder_id": folder.id, "name": folder.name });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Rename an existing harness folder.
+    #[tool(
+        description = "Rename a harness folder. The new name is trimmed and must be \
+        1-64 characters and not already used by another folder; renaming to the \
+        folder's own current name is allowed. Returns { ok: true }."
+    )]
+    async fn sugo_rename_folder(
+        &self,
+        Parameters(args): Parameters<tools::RenameFolderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::folder::rename_folder;
+
+        rename_folder(self.repo.as_ref(), self.clock.as_ref(), &args.folder_id, &args.name)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({ "ok": true });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Delete a harness folder without deleting the harnesses inside it.
+    #[tool(
+        description = "Delete a harness folder. Harnesses inside it are NOT deleted — \
+        they are moved back to Uncategorized (folder_id set to null). Because no \
+        harness data is lost, user confirmation is NOT required before calling this. \
+        Returns { ok: true, name, moved_to_uncategorized } where name is the deleted \
+        folder's display name and moved_to_uncategorized is how many harnesses were \
+        moved back to Uncategorized, so the caller can report what happened."
+    )]
+    async fn sugo_delete_folder(
+        &self,
+        Parameters(args): Parameters<tools::DeleteFolderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::folder::delete_folder;
+
+        let (name, moved_to_uncategorized) = delete_folder(self.repo.as_ref(), &args.folder_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({
+            "ok": true,
+            "name": name,
+            "moved_to_uncategorized": moved_to_uncategorized,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Move a harness into a folder, or back to Uncategorized.
+    #[tool(
+        description = "Move a harness into a folder, or pass folder_id=null to move it \
+        back to Uncategorized. A harness belongs to at most one folder at a time. \
+        Returns { ok: true }."
+    )]
+    async fn sugo_move_harness(
+        &self,
+        Parameters(args): Parameters<tools::MoveHarnessArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::folder::move_harness_to_folder;
+
+        move_harness_to_folder(self.repo.as_ref(), &args.harness_id, args.folder_id.as_deref())
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({ "ok": true });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
 }
 
 /// Parse a status string from the MCP boundary into a `CellStatus`, or an
@@ -718,7 +840,8 @@ impl ServerHandler for SugoServer {
         info.instructions = Some(
             "Sugo harness MCP server. Tools: sugo_create_harness, sugo_status, \
              sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_update_harness, \
-             sugo_delete_harness. \
+             sugo_delete_harness, sugo_list_folders, sugo_create_folder, sugo_rename_folder, \
+             sugo_delete_folder, sugo_move_harness. \
              Editing a cell always produces a new immutable board version guarded by an optimistic lock. \
              sugo_start begins a run and injects the first cell's prompt into the Nipper message queue; \
              sugo_advance follows an edge and injects the next cell's prompt into Nipper. \
@@ -1851,5 +1974,185 @@ mod tests {
             .await
             .expect_err("removing start cell must be rejected");
         assert_eq!(error_code(&err), "validation_failed");
+    }
+
+    #[tokio::test]
+    async fn sugo_create_folder_then_list_returns_it() {
+        let srv = server();
+        let created = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let folder_id = payload(&created)["folder_id"].as_str().unwrap().to_string();
+        assert!(!folder_id.is_empty());
+
+        let listed = srv.sugo_list_folders().await.unwrap();
+        let out = payload(&listed);
+        assert_eq!(out["folders"][0]["name"], "開発");
+        assert_eq!(out["folders"][0]["harness_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn sugo_create_folder_duplicate_name_is_conflict() {
+        let srv = server();
+        srv.sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let err = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_code(&err), "conflict");
+    }
+
+    #[tokio::test]
+    async fn sugo_rename_folder_updates_name() {
+        let srv = server();
+        let created = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let folder_id = payload(&created)["folder_id"].as_str().unwrap().to_string();
+
+        srv.sugo_rename_folder(Parameters(tools::RenameFolderArgs {
+            folder_id: folder_id.clone(),
+            name: "調査".into(),
+        }))
+        .await
+        .unwrap();
+
+        let listed = srv.sugo_list_folders().await.unwrap();
+        assert_eq!(payload(&listed)["folders"][0]["name"], "調査");
+    }
+
+    #[tokio::test]
+    async fn sugo_rename_folder_missing_id_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_rename_folder(Parameters(tools::RenameFolderArgs {
+                folder_id: "ghost".into(),
+                name: "新名称".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_code(&err), "not_found");
+    }
+
+    #[tokio::test]
+    async fn sugo_move_harness_to_null_folder_uncategorizes() {
+        let srv = server();
+        let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
+        let f = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();
+
+        srv.sugo_move_harness(Parameters(tools::MoveHarnessArgs {
+            harness_id: harness_id.clone(),
+            folder_id: Some(folder_id),
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            payload(&srv.sugo_list_folders().await.unwrap())["folders"][0]["harness_count"],
+            1
+        );
+
+        srv.sugo_move_harness(Parameters(tools::MoveHarnessArgs {
+            harness_id,
+            folder_id: None,
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            payload(&srv.sugo_list_folders().await.unwrap())["folders"][0]["harness_count"],
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn sugo_move_harness_missing_harness_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_move_harness(Parameters(tools::MoveHarnessArgs {
+                harness_id: "ghost".into(),
+                folder_id: None,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_code(&err), "not_found");
+    }
+
+    #[tokio::test]
+    async fn sugo_delete_folder_reports_name_and_moved_count() {
+        let srv = server();
+        let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
+        let f = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();
+        srv.sugo_move_harness(Parameters(tools::MoveHarnessArgs {
+            harness_id,
+            folder_id: Some(folder_id.clone()),
+        }))
+        .await
+        .unwrap();
+
+        let deleted = srv
+            .sugo_delete_folder(Parameters(tools::DeleteFolderArgs { folder_id }))
+            .await
+            .unwrap();
+        let out = payload(&deleted);
+        assert_eq!(out["ok"], serde_json::json!(true));
+        assert_eq!(out["name"], "開発");
+        assert_eq!(out["moved_to_uncategorized"], 1);
+
+        assert!(payload(&srv.sugo_list_folders().await.unwrap())["folders"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn sugo_delete_folder_missing_id_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_delete_folder(Parameters(tools::DeleteFolderArgs {
+                folder_id: "ghost".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_code(&err), "not_found");
+    }
+
+    #[tokio::test]
+    async fn sugo_status_summary_includes_folder_id_and_name() {
+        let srv = server();
+        let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
+        let f = srv
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .await
+            .unwrap();
+        let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();
+        srv.sugo_move_harness(Parameters(tools::MoveHarnessArgs {
+            harness_id: harness_id.clone(),
+            folder_id: Some(folder_id.clone()),
+        }))
+        .await
+        .unwrap();
+
+        let st = srv
+            .sugo_status(Parameters(tools::StatusArgs { harness_id: None }))
+            .await
+            .unwrap();
+        let harnesses = payload(&st)["harnesses"].as_array().unwrap().clone();
+        let entry = harnesses
+            .iter()
+            .find(|h| h["harness_id"] == serde_json::json!(harness_id))
+            .unwrap();
+        assert_eq!(entry["folder_id"], serde_json::json!(folder_id));
+        assert_eq!(entry["folder_name"], serde_json::json!("開発"));
     }
 }
