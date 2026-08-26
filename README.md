@@ -47,6 +47,6 @@ Sugoが公開する主なMCPツールは以下の通り。
 
 ```bash
 cd sugo-gui
-pnpm install
-pnpm tauri dev
+npm install
+npm run tauri dev
 ```
