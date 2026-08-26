@@ -131,6 +131,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_literal_empty_string_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let err = create_folder(&repo, &clock, "").await.unwrap_err();
+        assert!(matches!(err, CoreError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn folder_names_differing_only_in_case_are_not_duplicates() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let a = create_folder(&repo, &clock, "Dev").await.unwrap();
+        let b = create_folder(&repo, &clock, "dev").await.unwrap();
+        assert_eq!(a.name, "Dev");
+        assert_eq!(b.name, "dev");
+        assert_ne!(a.id, b.id);
+    }
+
+    #[tokio::test]
     async fn creates_folder_with_single_character_name() {
         let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
