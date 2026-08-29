@@ -38,5 +38,5 @@ Sugo（スーゴ）は、AIハーネスを「双六盤を組み立てるよう�
 
 ## git 運用
 
-- Sugo は **独立した git リポジトリ**（親 Asweed の `.gitignore` で `sandbox/*` が除外済み）
-- コミットは必ず Sugo 内で行う
+- Sugo は **独立した git リポジトリ**。Nipperのgit submoduleとして `Nipper/external/Sugo` に配置されている
+- コミットは必ず Sugo 内（`external/Sugo/`）で行う。Nipper側のコミットとは別
