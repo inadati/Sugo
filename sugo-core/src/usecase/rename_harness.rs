@@ -52,6 +52,34 @@ pub fn resolve_unique_name(existing: &[String], desired: &str) -> String {
     }
 }
 
+/// ハーネスを改名し、採番後の確定名を返す。
+///
+/// 重複判定は未削除の全ハーネス横断で行い（`repo.list()` はゴミ箱を除く）、
+/// 改名対象自身は候補から除外する。名前が重複しても失敗せず、`名前 (2)` の
+/// 形で採番する。ボードバージョンは変更しない。
+pub async fn rename_harness(
+    repo: &dyn HarnessRepository,
+    clock: &dyn IdClock,
+    harness_id: &str,
+    desired_name: &str,
+) -> Result<String, CoreError> {
+    if repo.get(harness_id).await?.is_none() {
+        return Err(CoreError::NotFound(harness_id.to_string()));
+    }
+    let desired = normalize_name(desired_name)?;
+    let existing: Vec<String> = repo
+        .list()
+        .await?
+        .into_iter()
+        .filter(|h| h.id != harness_id)
+        .map(|h| h.name)
+        .collect();
+    let final_name = resolve_unique_name(&existing, &desired);
+    repo.rename_harness(harness_id, &final_name, &clock.now_iso())
+        .await?;
+    Ok(final_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +139,103 @@ mod tests {
     fn normalize_accepts_exactly_max_chars() {
         let exact = "あ".repeat(MAX_HARNESS_NAME_CHARS);
         assert_eq!(normalize_name(&exact).unwrap(), exact);
+    }
+
+    use crate::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
+    use crate::usecase::create_harness::{create_harness, CreateHarnessInput};
+
+    async fn seed(repo: &InMemoryHarnessRepository, clock: &FakeIdClock, name: &str) -> String {
+        create_harness(
+            repo,
+            clock,
+            CreateHarnessInput { name: name.into(), description: None, definition: None },
+        )
+        .await
+        .unwrap()
+        .harness_id
+    }
+
+    #[tokio::test]
+    async fn renames_and_returns_final_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let id = seed(&repo, &clock, "alpha").await;
+
+        let final_name = rename_harness(&repo, &clock, &id, "beta").await.unwrap();
+
+        assert_eq!(final_name, "beta");
+        let (h, _) = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(h.name, "beta");
+    }
+
+    #[tokio::test]
+    async fn numbers_the_name_when_another_harness_has_it() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        seed(&repo, &clock, "alpha").await;
+        let id = seed(&repo, &clock, "beta").await;
+
+        let final_name = rename_harness(&repo, &clock, &id, "alpha").await.unwrap();
+
+        assert_eq!(final_name, "alpha (2)");
+    }
+
+    #[tokio::test]
+    async fn renaming_to_its_own_name_does_not_add_a_number() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let id = seed(&repo, &clock, "alpha").await;
+
+        let final_name = rename_harness(&repo, &clock, &id, "alpha").await.unwrap();
+
+        assert_eq!(final_name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn trims_surrounding_whitespace_before_saving() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let id = seed(&repo, &clock, "alpha").await;
+
+        let final_name = rename_harness(&repo, &clock, &id, "  beta  ").await.unwrap();
+
+        assert_eq!(final_name, "beta");
+    }
+
+    #[tokio::test]
+    async fn empty_name_is_rejected() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let id = seed(&repo, &clock, "alpha").await;
+
+        let err = rename_harness(&repo, &clock, &id, "   ").await.unwrap_err();
+
+        assert!(matches!(err, CoreError::Validation(_)));
+        let (h, _) = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(h.name, "alpha", "検証に失敗したら名前は変わらないこと");
+    }
+
+    #[tokio::test]
+    async fn unknown_harness_is_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+
+        let err = rename_harness(&repo, &clock, "nope", "beta").await.unwrap_err();
+
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn rename_does_not_bump_board_version() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let id = seed(&repo, &clock, "alpha").await;
+
+        rename_harness(&repo, &clock, &id, "beta").await.unwrap();
+
+        let (h, v) = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(h.current_version, 1);
+        assert_eq!(h.lock_version, 0);
+        assert_eq!(v.version_no, 1);
     }
 }
