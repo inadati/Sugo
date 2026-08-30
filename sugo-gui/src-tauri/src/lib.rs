@@ -4,9 +4,9 @@ mod state;
 
 use commands::{
     add_cell, add_edge, create_folder, create_harness, delete_cell, delete_edge, delete_folder,
-    get_active_runs, get_harness, list_folders, list_harnesses, list_trash,
-    move_harness_to_folder, purge_harness, rename_cell, rename_folder, rename_harness,
-    restore_harness, set_cell_memo, trash_harness, update_edge,
+    get_active_runs, get_harness, list_folders, list_harnesses, list_trash, move_harness_to_folder,
+    purge_harness, rename_cell, rename_folder, rename_harness, restore_harness, set_cell_memo,
+    trash_harness, update_edge,
 };
 use state::AppState;
 use sugo_core::ports::repository::HarnessRepository;
@@ -37,8 +37,7 @@ pub fn run() {
             let state = AppState::new(db_path.to_str().unwrap()).expect("init db");
 
             // 180日を超えてゴミ箱に入ったハーネスを起動時に自動パージ
-            let before = (chrono::Local::now() - chrono::Duration::days(180))
-                .to_rfc3339();
+            let before = (chrono::Local::now() - chrono::Duration::days(180)).to_rfc3339();
             let repo = state.repo.clone();
             tauri::async_runtime::block_on(async move {
                 let _ = repo.purge_trash_before(&before).await;

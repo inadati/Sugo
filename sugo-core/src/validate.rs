@@ -76,7 +76,12 @@ pub struct ValidationReport {
 }
 
 fn err(code: IssueCode, message: String, cell_id: Option<String>) -> ValidationIssue {
-    ValidationIssue { severity: Severity::Error, code, message, cell_id }
+    ValidationIssue {
+        severity: Severity::Error,
+        code,
+        message,
+        cell_id,
+    }
 }
 
 /// Validate a board definition and return all detected issues.
@@ -182,13 +187,30 @@ mod tests {
     use crate::domain::edge::Edge;
 
     fn cell(id: &str, terminal: bool, status: CellStatus) -> Cell {
-        Cell { id: id.into(), name: id.into(), prompt: "p".into(), status, terminal, request_memo: "".into() }
+        Cell {
+            id: id.into(),
+            name: id.into(),
+            prompt: "p".into(),
+            status,
+            terminal,
+            request_memo: "".into(),
+        }
     }
     fn edge(from: &str, to: &str) -> Edge {
-        Edge { from: from.into(), to: to.into(), label: "l".into(), guard: None }
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            label: "l".into(),
+            guard: None,
+        }
     }
     fn board(cells: Vec<Cell>, edges: Vec<Edge>, start: &str) -> BoardDefinition {
-        BoardDefinition { schema_version: 1, start: start.into(), cells, edges }
+        BoardDefinition {
+            schema_version: 1,
+            start: start.into(),
+            cells,
+            edges,
+        }
     }
     /// Return the issue with the given code, or None if absent.
     fn find(r: &ValidationReport, code: IssueCode) -> Option<&ValidationIssue> {
@@ -198,7 +220,10 @@ mod tests {
     #[test]
     fn valid_board_is_ok() {
         let b = board(
-            vec![cell("c1", false, CellStatus::Active), cell("c2", true, CellStatus::Active)],
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", true, CellStatus::Active),
+            ],
             vec![edge("c1", "c2")],
             "c1",
         );
@@ -210,7 +235,10 @@ mod tests {
     #[test]
     fn detects_duplicate_cell_id() {
         let b = board(
-            vec![cell("c1", true, CellStatus::Active), cell("c1", false, CellStatus::Active)],
+            vec![
+                cell("c1", true, CellStatus::Active),
+                cell("c1", false, CellStatus::Active),
+            ],
             vec![],
             "c1",
         );
@@ -261,7 +289,10 @@ mod tests {
     #[test]
     fn detects_no_terminal() {
         let b = board(
-            vec![cell("c1", false, CellStatus::Active), cell("c2", false, CellStatus::Active)],
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", false, CellStatus::Active),
+            ],
             vec![edge("c1", "c2")],
             "c1",
         );
@@ -274,7 +305,10 @@ mod tests {
     #[test]
     fn reports_has_draft_as_warning() {
         let b = board(
-            vec![cell("c1", false, CellStatus::Active), cell("c2", true, CellStatus::Draft)],
+            vec![
+                cell("c1", false, CellStatus::Active),
+                cell("c2", true, CellStatus::Draft),
+            ],
             vec![edge("c1", "c2")],
             "c1",
         );
@@ -314,7 +348,10 @@ mod tests {
             "c1",
         );
         let r = validate_board(&b);
-        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "no cell should be unreachable in a cycle");
+        assert!(
+            find(&r, IssueCode::UnreachableCell).is_none(),
+            "no cell should be unreachable in a cycle"
+        );
         assert!(r.ok);
     }
 
@@ -330,11 +367,19 @@ mod tests {
                 cell("c3", false, CellStatus::Active),
                 cell("c4", true, CellStatus::Active),
             ],
-            vec![edge("c1", "c2"), edge("c1", "c3"), edge("c2", "c4"), edge("c3", "c4")],
+            vec![
+                edge("c1", "c2"),
+                edge("c1", "c3"),
+                edge("c2", "c4"),
+                edge("c3", "c4"),
+            ],
             "c1",
         );
         let r = validate_board(&b);
-        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "all diamond cells should be reachable");
+        assert!(
+            find(&r, IssueCode::UnreachableCell).is_none(),
+            "all diamond cells should be reachable"
+        );
         assert!(r.ok);
     }
 
@@ -353,7 +398,10 @@ mod tests {
             "c1",
         );
         let r = validate_board(&b);
-        assert!(find(&r, IssueCode::UnreachableCell).is_none(), "all cells on the path should be reachable");
+        assert!(
+            find(&r, IssueCode::UnreachableCell).is_none(),
+            "all cells on the path should be reachable"
+        );
         assert!(r.ok);
     }
 }

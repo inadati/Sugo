@@ -116,11 +116,8 @@ impl SqliteHarnessRepository {
             })
             .map_err(map_err)?;
         if !has_deleted_at {
-            conn.execute(
-                "ALTER TABLE harnesses ADD COLUMN deleted_at TEXT",
-                [],
-            )
-            .map_err(map_err)?;
+            conn.execute("ALTER TABLE harnesses ADD COLUMN deleted_at TEXT", [])
+                .map_err(map_err)?;
         }
         // Idempotent migration for description (harness metadata, added 2026-06).
         let has_description: bool = conn
@@ -133,11 +130,8 @@ impl SqliteHarnessRepository {
             })
             .map_err(map_err)?;
         if !has_description {
-            conn.execute(
-                "ALTER TABLE harnesses ADD COLUMN description TEXT",
-                [],
-            )
-            .map_err(map_err)?;
+            conn.execute("ALTER TABLE harnesses ADD COLUMN description TEXT", [])
+                .map_err(map_err)?;
         }
         // Idempotent migration for folder_id (harness folders, added 2026-08).
         let has_folder_id: bool = conn
@@ -322,7 +316,10 @@ impl HarnessRepository for SqliteHarnessRepository {
         tx.execute("DELETE FROM runs WHERE harness_id = ?1", [id])
             .map_err(map_err)?;
         let affected = tx
-            .execute("DELETE FROM harnesses WHERE id = ?1 AND deleted_at IS NOT NULL", [id])
+            .execute(
+                "DELETE FROM harnesses WHERE id = ?1 AND deleted_at IS NOT NULL",
+                [id],
+            )
             .map_err(map_err)?;
         if affected == 0 {
             return Err(CoreError::NotFound(id.to_string()));
@@ -457,12 +454,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(())
     }
 
-    async fn rename_folder(
-        &self,
-        id: &str,
-        name: &str,
-        updated_at: &str,
-    ) -> Result<(), CoreError> {
+    async fn rename_folder(&self, id: &str, name: &str, updated_at: &str) -> Result<(), CoreError> {
         let conn = self.lock();
         let n = conn
             .execute(
@@ -546,7 +538,8 @@ fn insert_harness(conn: &Connection, h: &Harness) -> Result<(), CoreError> {
 }
 
 fn insert_version(conn: &Connection, v: &BoardVersion) -> Result<(), CoreError> {
-    let json = serde_json::to_string(&v.definition).map_err(|e| CoreError::Storage(e.to_string()))?;
+    let json =
+        serde_json::to_string(&v.definition).map_err(|e| CoreError::Storage(e.to_string()))?;
     conn.execute(
         "INSERT INTO board_versions (id,harness_id,version_no,definition_json,content_hash,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
         rusqlite::params![v.id, v.harness_id, v.version_no, json, v.content_hash, v.created_at],
@@ -749,7 +742,10 @@ mod tests {
     async fn delete_folder_is_transactional_and_keeps_harnesses() {
         let repo = SqliteHarnessRepository::in_memory().unwrap();
         let f = Folder {
-            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            id: "f1".into(),
+            name: "開発".into(),
+            parent_id: None,
+            sort_order: 0,
             created_at: "2026-08-26T00:00:00+09:00".into(),
             updated_at: "2026-08-26T00:00:00+09:00".into(),
         };
@@ -770,7 +766,10 @@ mod tests {
     async fn list_folders_counts_exclude_trashed_harnesses() {
         let repo = SqliteHarnessRepository::in_memory().unwrap();
         let f = Folder {
-            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            id: "f1".into(),
+            name: "開発".into(),
+            parent_id: None,
+            sort_order: 0,
             created_at: "2026-08-26T00:00:00+09:00".into(),
             updated_at: "2026-08-26T00:00:00+09:00".into(),
         };
@@ -780,7 +779,9 @@ mod tests {
             repo.create(&h, &v).await.unwrap();
             repo.move_harness_to_folder(id, Some("f1")).await.unwrap();
         }
-        repo.trash_harness("h2", "2026-08-26T10:00:00+09:00").await.unwrap();
+        repo.trash_harness("h2", "2026-08-26T10:00:00+09:00")
+            .await
+            .unwrap();
 
         assert_eq!(repo.list_folders().await.unwrap()[0].1, 1);
     }
@@ -789,7 +790,10 @@ mod tests {
     async fn trashed_harness_keeps_folder_and_restores_into_it() {
         let repo = SqliteHarnessRepository::in_memory().unwrap();
         let f = Folder {
-            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            id: "f1".into(),
+            name: "開発".into(),
+            parent_id: None,
+            sort_order: 0,
             created_at: "2026-08-26T00:00:00+09:00".into(),
             updated_at: "2026-08-26T00:00:00+09:00".into(),
         };
@@ -797,7 +801,9 @@ mod tests {
         let (h, v) = (harness("h1", 1, 0), version("v1", "h1", 1, "p"));
         repo.create(&h, &v).await.unwrap();
         repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
-        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00")
+            .await
+            .unwrap();
         repo.restore_harness("h1").await.unwrap();
 
         let hs = repo.list().await.unwrap();
@@ -809,7 +815,10 @@ mod tests {
         let repo = SqliteHarnessRepository::in_memory().unwrap();
         for (id, name, order) in [("f2", "後", 1), ("f1", "先", 0)] {
             repo.create_folder(&Folder {
-                id: id.into(), name: name.into(), parent_id: None, sort_order: order,
+                id: id.into(),
+                name: name.into(),
+                parent_id: None,
+                sort_order: order,
                 created_at: "2026-08-26T00:00:00+09:00".into(),
                 updated_at: "2026-08-26T00:00:00+09:00".into(),
             })
@@ -832,7 +841,10 @@ mod tests {
     async fn delete_folder_nulls_folder_id_of_trashed_harness() {
         let repo = SqliteHarnessRepository::in_memory().unwrap();
         let f = Folder {
-            id: "f1".into(), name: "開発".into(), parent_id: None, sort_order: 0,
+            id: "f1".into(),
+            name: "開発".into(),
+            parent_id: None,
+            sort_order: 0,
             created_at: "2026-08-26T00:00:00+09:00".into(),
             updated_at: "2026-08-26T00:00:00+09:00".into(),
         };
@@ -840,7 +852,9 @@ mod tests {
         let (h, v) = (harness("h1", 1, 0), version("v1", "h1", 1, "p"));
         repo.create(&h, &v).await.unwrap();
         repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
-        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00")
+            .await
+            .unwrap();
 
         // Sanity: the harness is still visible in the trash and still points
         // at f1 at the raw-row level before the folder is deleted.
@@ -1014,7 +1028,10 @@ mod tests {
         // This create contends for the write lock; busy_timeout must let it wait
         // out the ~300ms holder instead of returning a SQLITE_BUSY storage error.
         let res = repo
-            .create(&harness("h2", 1, 0), &version("v-h2", "h2", 1, "after-wait"))
+            .create(
+                &harness("h2", 1, 0),
+                &version("v-h2", "h2", 1, "after-wait"),
+            )
             .await;
         holder.join().expect("holder thread joins");
         res.expect("busy_timeout must absorb contention, not BUSY-fail");
@@ -1137,7 +1154,10 @@ mod tests {
         repo.trash_harness("h1", "2026-06-30T10:00:00+09:00")
             .await
             .expect("trash");
-        assert!(repo.list().await.unwrap().is_empty(), "list excludes trashed");
+        assert!(
+            repo.list().await.unwrap().is_empty(),
+            "list excludes trashed"
+        );
         let trash = repo.list_trash().await.unwrap();
         assert_eq!(trash.len(), 1);
         assert_eq!(trash[0].0, "h1");
@@ -1201,7 +1221,10 @@ mod tests {
         // trash h1 directly via SQL
         let now = "2026-06-30T10:00:00+09:00";
         repo.lock()
-            .execute("UPDATE harnesses SET deleted_at = ?1 WHERE id = ?2", [now, "h1"])
+            .execute(
+                "UPDATE harnesses SET deleted_at = ?1 WHERE id = ?2",
+                [now, "h1"],
+            )
             .expect("set deleted_at");
         let listed = repo.list().await.expect("list");
         assert_eq!(listed.len(), 1);

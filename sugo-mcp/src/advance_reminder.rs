@@ -27,22 +27,33 @@ pub fn spawn(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(POLL_SECS)).await;
 
-            let Ok(Some(run)) = run_repo.get(&run_id).await else { break };
-            if run.status != RunStatus::Running { break }
+            let Ok(Some(run)) = run_repo.get(&run_id).await else {
+                break;
+            };
+            if run.status != RunStatus::Running {
+                break;
+            }
             // advance was called (new inject in flight) — stop watching
-            if run.inject_pending_since.is_some() { break }
+            if run.inject_pending_since.is_some() {
+                break;
+            }
 
             // Turn not yet complete — keep waiting
-            if !jsonl_watcher::has_assistant_entry_since(&project_path, &since_iso) { continue }
+            if !jsonl_watcher::has_assistant_entry_since(&project_path, &since_iso) {
+                continue;
+            }
 
-            if reminders_sent >= MAX_REMINDERS { break }
+            if reminders_sent >= MAX_REMINDERS {
+                break;
+            }
 
             let msg = format!(
                 "【Sugo】Claude Code のターンが完了しましたが `sugo_advance` がまだ呼ばれていません。\n\
                  このセルのタスクが完了したら `sugo_advance` を呼び出して次のセルに進んでください。\n\
                  run_id: `{run_id}`"
             );
-            let _ = crate::nipper_client::inject(&nipper_base, &token_path, &project_path, &msg).await;
+            let _ =
+                crate::nipper_client::inject(&nipper_base, &token_path, &project_path, &msg).await;
             reminders_sent += 1;
         }
     });

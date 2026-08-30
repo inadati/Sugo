@@ -47,7 +47,12 @@ pub async fn start_run(
         .ok_or_else(|| CoreError::NotFound(input.harness_id.clone()))?;
 
     // SPEC 決定10c: draft cell が 1 つでもあれば実行開始をハードエラーにする
-    if version.definition.cells.iter().any(|c| c.status == CellStatus::Draft) {
+    if version
+        .definition
+        .cells
+        .iter()
+        .any(|c| c.status == CellStatus::Draft)
+    {
         return Err(CoreError::DraftCellsExist);
     }
 
@@ -153,7 +158,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(two_cell_board()) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(two_cell_board()),
+            },
         )
         .await
         .unwrap();
@@ -161,7 +170,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: out.harness_id.clone(), project_path: None },
+            StartRunInput {
+                harness_id: out.harness_id.clone(),
+                project_path: None,
+            },
         )
         .await
         .unwrap();
@@ -206,7 +218,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -214,7 +230,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: out.harness_id, project_path: None },
+            StartRunInput {
+                harness_id: out.harness_id,
+                project_path: None,
+            },
         )
         .await
         .unwrap_err();
@@ -230,7 +249,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: "nope".into(), project_path: None },
+            StartRunInput {
+                harness_id: "nope".into(),
+                project_path: None,
+            },
         )
         .await
         .unwrap_err();

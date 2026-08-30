@@ -12,9 +12,9 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{Json, Router, extract::State, routing::post};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sugo_core::domain::run::RunStatus;
 use sugo_core::ports::id_clock::IdClock;
 use sugo_core::ports::run_repository::RunRepository;
@@ -55,13 +55,19 @@ pub fn status_for_reason(reason: &str) -> Option<RunStatus> {
     }
 }
 
-async fn handle_heartbeat(State(st): State<CallbackState>, Json(req): Json<HeartbeatReq>) -> Json<Value> {
+async fn handle_heartbeat(
+    State(st): State<CallbackState>,
+    Json(req): Json<HeartbeatReq>,
+) -> Json<Value> {
     let now = st.clock.now_iso();
     let _ = st.run_repo.update_heartbeat(&req.run_id, &now).await;
     Json(json!({ "status": "ok" }))
 }
 
-async fn handle_inject_ack(State(st): State<CallbackState>, Json(req): Json<InjectAckReq>) -> Json<Value> {
+async fn handle_inject_ack(
+    State(st): State<CallbackState>,
+    Json(req): Json<InjectAckReq>,
+) -> Json<Value> {
     let _ = st.run_repo.set_inject_pending(&req.run_id, None).await;
     // After ack, monitor jsonl and remind agent to call sugo_advance if it forgets.
     let since_iso = st.clock.now_iso();
@@ -80,7 +86,10 @@ async fn handle_inject_ack(State(st): State<CallbackState>, Json(req): Json<Inje
     Json(json!({ "status": "ok" }))
 }
 
-async fn handle_session_event(State(st): State<CallbackState>, Json(req): Json<SessionEventReq>) -> Json<Value> {
+async fn handle_session_event(
+    State(st): State<CallbackState>,
+    Json(req): Json<SessionEventReq>,
+) -> Json<Value> {
     if let Some(status) = status_for_reason(&req.reason)
         && let Ok(Some(mut run)) = st.run_repo.get(&req.run_id).await
     {
@@ -136,8 +145,8 @@ pub async fn start(state: CallbackState) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sugo_infra::sqlite::schema::SCHEMA;
     use std::sync::Mutex;
+    use sugo_infra::sqlite::schema::SCHEMA;
 
     fn state() -> CallbackState {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -153,21 +162,41 @@ mod tests {
     #[test]
     fn reason_mapping() {
         assert_eq!(status_for_reason("user_closed"), Some(RunStatus::Closed));
-        assert_eq!(status_for_reason("session_exited"), Some(RunStatus::Disconnected));
+        assert_eq!(
+            status_for_reason("session_exited"),
+            Some(RunStatus::Disconnected)
+        );
         assert_eq!(status_for_reason("weird"), None);
     }
 
     #[tokio::test]
     async fn heartbeat_updates_last_heartbeat_at() {
         let st = state();
-        st.run_repo.create(&{
-            use sugo_core::domain::run::Run;
-            Run { id: "r1".into(), harness_id: "h1".into(), board_version_no: 1,
-                current_cell_id: "c1".into(), status: RunStatus::Running,
-                project_path: Some("/p".into()), created_at: "t".into(), updated_at: "t".into(),
-                last_heartbeat_at: None, inject_pending_since: None }
-        }).await.unwrap();
-        let _ = handle_heartbeat(State(st.clone()), Json(HeartbeatReq { run_id: "r1".into() })).await;
+        st.run_repo
+            .create(&{
+                use sugo_core::domain::run::Run;
+                Run {
+                    id: "r1".into(),
+                    harness_id: "h1".into(),
+                    board_version_no: 1,
+                    current_cell_id: "c1".into(),
+                    status: RunStatus::Running,
+                    project_path: Some("/p".into()),
+                    created_at: "t".into(),
+                    updated_at: "t".into(),
+                    last_heartbeat_at: None,
+                    inject_pending_since: None,
+                }
+            })
+            .await
+            .unwrap();
+        let _ = handle_heartbeat(
+            State(st.clone()),
+            Json(HeartbeatReq {
+                run_id: "r1".into(),
+            }),
+        )
+        .await;
         let got = st.run_repo.get("r1").await.unwrap().unwrap();
         assert!(got.last_heartbeat_at.is_some());
     }
@@ -175,14 +204,32 @@ mod tests {
     #[tokio::test]
     async fn session_event_user_closed_sets_closed() {
         let st = state();
-        st.run_repo.create(&{
-            use sugo_core::domain::run::Run;
-            Run { id: "r1".into(), harness_id: "h1".into(), board_version_no: 1,
-                current_cell_id: "c1".into(), status: RunStatus::Running,
-                project_path: Some("/p".into()), created_at: "t".into(), updated_at: "t".into(),
-                last_heartbeat_at: None, inject_pending_since: None }
-        }).await.unwrap();
-        let _ = handle_session_event(State(st.clone()), Json(SessionEventReq { run_id: "r1".into(), reason: "user_closed".into() })).await;
+        st.run_repo
+            .create(&{
+                use sugo_core::domain::run::Run;
+                Run {
+                    id: "r1".into(),
+                    harness_id: "h1".into(),
+                    board_version_no: 1,
+                    current_cell_id: "c1".into(),
+                    status: RunStatus::Running,
+                    project_path: Some("/p".into()),
+                    created_at: "t".into(),
+                    updated_at: "t".into(),
+                    last_heartbeat_at: None,
+                    inject_pending_since: None,
+                }
+            })
+            .await
+            .unwrap();
+        let _ = handle_session_event(
+            State(st.clone()),
+            Json(SessionEventReq {
+                run_id: "r1".into(),
+                reason: "user_closed".into(),
+            }),
+        )
+        .await;
         let got = st.run_repo.get("r1").await.unwrap().unwrap();
         assert_eq!(got.status, RunStatus::Closed);
     }

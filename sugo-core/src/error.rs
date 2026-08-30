@@ -50,7 +50,10 @@ mod tests {
 
     #[test]
     fn lock_conflict_message() {
-        let e = CoreError::LockConflict { expected: 1, actual: 2 };
+        let e = CoreError::LockConflict {
+            expected: 1,
+            actual: 2,
+        };
         assert_eq!(e.to_string(), "lock conflict: expected 1, actual 2");
     }
 

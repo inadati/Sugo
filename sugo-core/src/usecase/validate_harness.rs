@@ -40,13 +40,20 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
         let report = validate_harness(&repo, &out.harness_id).await.unwrap();
         assert!(report.ok); // default_board is valid: active + terminal
-        assert!(report.issues.is_empty(), "default board must produce zero issues (no warnings either)");
+        assert!(
+            report.issues.is_empty(),
+            "default board must produce zero issues (no warnings either)"
+        );
     }
 
     #[tokio::test]
@@ -77,7 +84,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();

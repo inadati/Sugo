@@ -71,12 +71,8 @@ pub trait HarnessRepository: Send + Sync {
     /// ハーネス名を更新する（name と updated_at のみ更新、ボードバージョンは変更しない）。
     /// ゴミ箱内のハーネスは対象外。`id` が存在しない場合は `CoreError::NotFound`。
     /// 名前の重複解決は usecase 層の責務であり、ここでは行わない。
-    async fn rename_harness(
-        &self,
-        id: &str,
-        name: &str,
-        updated_at: &str,
-    ) -> Result<(), CoreError>;
+    async fn rename_harness(&self, id: &str, name: &str, updated_at: &str)
+    -> Result<(), CoreError>;
 
     /// フォルダ一覧を返す。各要素は `(フォルダ, 所属する未削除ハーネスの件数)`。
     /// `sort_order` の昇順で返すこと。
@@ -85,12 +81,7 @@ pub trait HarnessRepository: Send + Sync {
     /// 名前の重複判定は usecase 層の責務であり、ここでは行わない。
     async fn create_folder(&self, folder: &Folder) -> Result<(), CoreError>;
     /// フォルダ名を更新する。`id` が存在しない場合は `CoreError::NotFound`。
-    async fn rename_folder(
-        &self,
-        id: &str,
-        name: &str,
-        updated_at: &str,
-    ) -> Result<(), CoreError>;
+    async fn rename_folder(&self, id: &str, name: &str, updated_at: &str) -> Result<(), CoreError>;
     /// フォルダを削除する。所属ハーネスの `folder_id` を NULL に戻してから
     /// フォルダ行を削除する（単一トランザクション）。ハーネスは削除しない。
     /// `id` が存在しない場合は `CoreError::NotFound`。
@@ -130,7 +121,9 @@ pub mod fake {
     impl FakeIdClock {
         /// Create a `FakeIdClock` whose id counter starts at zero.
         pub fn new() -> Self {
-            Self { counter: AtomicU64::new(0) }
+            Self {
+                counter: AtomicU64::new(0),
+            }
         }
     }
     impl Default for FakeIdClock {
@@ -170,11 +163,7 @@ pub mod fake {
 
     #[async_trait]
     impl HarnessRepository for InMemoryHarnessRepository {
-        async fn create(
-            &self,
-            harness: &Harness,
-            version: &BoardVersion,
-        ) -> Result<(), CoreError> {
+        async fn create(&self, harness: &Harness, version: &BoardVersion) -> Result<(), CoreError> {
             let mut hs = self.harnesses.lock().unwrap();
             // Like sqlite's id PRIMARY KEY, reject a duplicate id instead of
             // silently overwriting.
@@ -304,10 +293,7 @@ pub mod fake {
             let deleted = self.deleted_at.lock().unwrap();
             Ok(deleted
                 .iter()
-                .filter_map(|(id, ts)| {
-                    hs.get(id)
-                        .map(|h| (id.clone(), h.name.clone(), ts.clone()))
-                })
+                .filter_map(|(id, ts)| hs.get(id).map(|h| (id.clone(), h.name.clone(), ts.clone())))
                 .collect())
         }
 
@@ -326,9 +312,15 @@ pub mod fake {
             Ok(())
         }
 
-        async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError> {
+        async fn set_description(
+            &self,
+            id: &str,
+            description: Option<&str>,
+        ) -> Result<(), CoreError> {
             let mut hs = self.harnesses.lock().unwrap();
-            let h = hs.get_mut(id).ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+            let h = hs
+                .get_mut(id)
+                .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
             h.description = description.map(|s| s.to_string());
             Ok(())
         }
@@ -345,7 +337,9 @@ pub mod fake {
             }
             drop(deleted);
             let mut hs = self.harnesses.lock().unwrap();
-            let h = hs.get_mut(id).ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+            let h = hs
+                .get_mut(id)
+                .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
             h.name = name.to_string();
             h.updated_at = updated_at.to_string();
             Ok(())
@@ -481,7 +475,7 @@ pub mod fake {
 
 #[cfg(test)]
 mod fake_tests {
-    use super::fake::{sample_harness, InMemoryHarnessRepository};
+    use super::fake::{InMemoryHarnessRepository, sample_harness};
     use super::*;
     use crate::domain::folder::Folder;
 
@@ -535,7 +529,9 @@ mod fake_tests {
         let (h, v) = super::fake::sample_harness("h1");
         repo.create(&h, &v).await.unwrap();
         repo.move_harness_to_folder("h1", Some("f1")).await.unwrap();
-        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00").await.unwrap();
+        repo.trash_harness("h1", "2026-08-26T10:00:00+09:00")
+            .await
+            .unwrap();
 
         // Sanity: the trashed harness is still fetchable and still points at
         // f1 before the folder is deleted.
@@ -588,10 +584,7 @@ mod fake_tests {
     #[tokio::test]
     async fn fake_rename_harness_unknown_id_is_not_found() {
         let repo = InMemoryHarnessRepository::new();
-        let err = repo
-            .rename_harness("nope", "x", "t")
-            .await
-            .unwrap_err();
+        let err = repo.rename_harness("nope", "x", "t").await.unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
     }
 
@@ -600,7 +593,9 @@ mod fake_tests {
         let repo = InMemoryHarnessRepository::new();
         let (h, v) = sample_harness("h1");
         repo.create(&h, &v).await.unwrap();
-        repo.trash_harness("h1", "2026-08-30T00:00:00+09:00").await.unwrap();
+        repo.trash_harness("h1", "2026-08-30T00:00:00+09:00")
+            .await
+            .unwrap();
 
         let err = repo.rename_harness("h1", "x", "t").await.unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
@@ -609,7 +604,10 @@ mod fake_tests {
     #[tokio::test]
     async fn move_harness_unknown_id_is_not_found() {
         let repo = InMemoryHarnessRepository::new();
-        let err = repo.move_harness_to_folder("ghost", None).await.unwrap_err();
+        let err = repo
+            .move_harness_to_folder("ghost", None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
     }
 }

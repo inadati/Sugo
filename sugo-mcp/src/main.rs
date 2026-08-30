@@ -394,7 +394,13 @@ impl SugoServer {
             .run_repo
             .set_inject_pending(&out.run_id, Some(&self.clock.now_iso()))
             .await;
-        let inj = nipper_client::inject(&self.nipper_base, &self.token_path, &project_path, &inject_text).await;
+        let inj = nipper_client::inject(
+            &self.nipper_base,
+            &self.token_path,
+            &project_path,
+            &inject_text,
+        )
+        .await;
         if let Some(e) = error::nipper_outcome_error(inj) {
             let _ = self.run_repo.set_inject_pending(&out.run_id, None).await;
             return Err(e);
@@ -425,31 +431,31 @@ impl SugoServer {
         // After 30 s without an ack the inject is considered lost; mark the run Stalled
         // so the caller gets a hard error instead of being blocked forever.
         const INJECT_TIMEOUT_SECS: i64 = 30;
-        if let Ok(Some(mut run)) = self.run_repo.get(&args.run_id).await {
-            if let Some(ref pending_since) = run.inject_pending_since {
-                let elapsed = chrono::DateTime::parse_from_rfc3339(pending_since)
-                    .ok()
-                    .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds())
-                    .unwrap_or(0)
-                    .max(0);
-                if elapsed < INJECT_TIMEOUT_SECS {
-                    return Err(ErrorData::invalid_params(
-                        "inject pending: Nipper has not yet acknowledged the previous inject; retry after /inject-ack",
-                        Some(serde_json::json!({ "code": "inject_pending" })),
-                    ));
-                }
-                // Timeout: ack never arrived — mark run Stalled and fail hard.
-                run.status = sugo_core::domain::run::RunStatus::Stalled;
-                run.updated_at = self.clock.now_iso();
-                let _ = self.run_repo.update(&run).await;
+        if let Ok(Some(mut run)) = self.run_repo.get(&args.run_id).await
+            && let Some(ref pending_since) = run.inject_pending_since
+        {
+            let elapsed = chrono::DateTime::parse_from_rfc3339(pending_since)
+                .ok()
+                .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds())
+                .unwrap_or(0)
+                .max(0);
+            if elapsed < INJECT_TIMEOUT_SECS {
                 return Err(ErrorData::invalid_params(
-                    format!(
-                        "inject timeout: Nipper did not acknowledge the inject after {elapsed}s. \
-                         The run is now Stalled. Call sugo_start to begin a new run."
-                    ),
-                    Some(serde_json::json!({ "code": "inject_timeout" })),
+                    "inject pending: Nipper has not yet acknowledged the previous inject; retry after /inject-ack",
+                    Some(serde_json::json!({ "code": "inject_pending" })),
                 ));
             }
+            // Timeout: ack never arrived — mark run Stalled and fail hard.
+            run.status = sugo_core::domain::run::RunStatus::Stalled;
+            run.updated_at = self.clock.now_iso();
+            let _ = self.run_repo.update(&run).await;
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "inject timeout: Nipper did not acknowledge the inject after {elapsed}s. \
+                     The run is now Stalled. Call sugo_start to begin a new run."
+                ),
+                Some(serde_json::json!({ "code": "inject_timeout" })),
+            ));
         }
 
         let run_id_for_lookup = args.run_id.clone();
@@ -481,7 +487,8 @@ impl SugoServer {
                     .set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso()))
                     .await;
             }
-            let inj = nipper_client::inject(&self.nipper_base, &self.token_path, pp, &inject_text).await;
+            let inj =
+                nipper_client::inject(&self.nipper_base, &self.token_path, pp, &inject_text).await;
             if let Some(e) = error::nipper_outcome_error(inj) {
                 let _ = self
                     .run_repo
@@ -490,7 +497,13 @@ impl SugoServer {
                 return Err(e);
             }
             if out.terminal {
-                let _ = nipper_client::detach(&self.nipper_base, &self.token_path, pp, &run_id_for_lookup).await;
+                let _ = nipper_client::detach(
+                    &self.nipper_base,
+                    &self.token_path,
+                    pp,
+                    &run_id_for_lookup,
+                )
+                .await;
             }
         }
 
@@ -703,7 +716,11 @@ impl SugoServer {
         represented by a folder entry here."
     )]
     async fn sugo_list_folders(&self) -> Result<CallToolResult, ErrorData> {
-        let folders = self.repo.list_folders().await.map_err(error::to_tool_error)?;
+        let folders = self
+            .repo
+            .list_folders()
+            .await
+            .map_err(error::to_tool_error)?;
         let payload = serde_json::json!({
             "folders": folders
                 .into_iter()
@@ -754,9 +771,14 @@ impl SugoServer {
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::folder::rename_folder;
 
-        rename_folder(self.repo.as_ref(), self.clock.as_ref(), &args.folder_id, &args.name)
-            .await
-            .map_err(error::to_tool_error)?;
+        rename_folder(
+            self.repo.as_ref(),
+            self.clock.as_ref(),
+            &args.folder_id,
+            &args.name,
+        )
+        .await
+        .map_err(error::to_tool_error)?;
 
         let payload = serde_json::json!({ "ok": true });
         Ok(CallToolResult::success(vec![Content::text(
@@ -805,9 +827,13 @@ impl SugoServer {
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::folder::move_harness_to_folder;
 
-        move_harness_to_folder(self.repo.as_ref(), &args.harness_id, args.folder_id.as_deref())
-            .await
-            .map_err(error::to_tool_error)?;
+        move_harness_to_folder(
+            self.repo.as_ref(),
+            &args.harness_id,
+            args.folder_id.as_deref(),
+        )
+        .await
+        .map_err(error::to_tool_error)?;
 
         let payload = serde_json::json!({ "ok": true });
         Ok(CallToolResult::success(vec![Content::text(
@@ -904,7 +930,11 @@ async fn main() -> anyhow::Result<()> {
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
 
     let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
-    let token_dir_name = if cfg!(debug_assertions) { ".nipper-dev" } else { ".nipper" };
+    let token_dir_name = if cfg!(debug_assertions) {
+        ".nipper-dev"
+    } else {
+        ".nipper"
+    };
     let token_path = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("home directory not found"))?
         .join(token_dir_name)
@@ -921,7 +951,13 @@ async fn main() -> anyhow::Result<()> {
     };
     let callback_url = callback::start(callback_state).await?;
 
-    let server = SugoServer::new(harness_repo, run_repo, callback_url, nipper_base, token_path);
+    let server = SugoServer::new(
+        harness_repo,
+        run_repo,
+        callback_url,
+        nipper_base,
+        token_path,
+    );
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -946,7 +982,8 @@ mod tests {
         conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA)
             .expect("schema");
         let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(conn)));
-        let token_path = std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
+        let token_path =
+            std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
         std::fs::write(&token_path, "test-token").expect("write temp token");
         SugoServer::new(
             harness_repo,
@@ -1931,7 +1968,11 @@ mod tests {
             .await
             .unwrap();
         let harnesses = payload(&st)["harnesses"].as_array().unwrap().clone();
-        assert!(!harnesses.iter().any(|h| h["harness_id"] == serde_json::json!(id)));
+        assert!(
+            !harnesses
+                .iter()
+                .any(|h| h["harness_id"] == serde_json::json!(id))
+        );
     }
 
     #[tokio::test]
@@ -1941,9 +1982,7 @@ mod tests {
         // seed_run uses RealIdClock's wall-clock time, so the run is fresh (active).
         seed_run(&srv, &id).await;
         let err = srv
-            .sugo_delete_harness(Parameters(tools::DeleteHarnessArgs {
-                harness_id: id,
-            }))
+            .sugo_delete_harness(Parameters(tools::DeleteHarnessArgs { harness_id: id }))
             .await
             .expect_err("active run must block delete");
         assert_eq!(error_code(&err), "active_run");
@@ -1981,11 +2020,19 @@ mod tests {
         assert_eq!(payload(&result)["new_version"].as_i64().unwrap(), 2);
 
         let st = srv
-            .sugo_status(Parameters(tools::StatusArgs { harness_id: Some(hid) }))
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(hid),
+            }))
             .await
             .unwrap();
         let st_p = payload(&st);
-        assert!(!st_p["cells"].as_array().unwrap().iter().any(|c| c["id"] == serde_json::json!("c2")));
+        assert!(
+            !st_p["cells"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == serde_json::json!("c2"))
+        );
         assert!(st_p["edges"].as_array().unwrap().is_empty());
     }
 
@@ -2013,7 +2060,9 @@ mod tests {
     async fn sugo_create_folder_then_list_returns_it() {
         let srv = server();
         let created = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap();
         let folder_id = payload(&created)["folder_id"].as_str().unwrap().to_string();
@@ -2028,11 +2077,15 @@ mod tests {
     #[tokio::test]
     async fn sugo_create_folder_duplicate_name_is_conflict() {
         let srv = server();
-        srv.sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
-            .await
-            .unwrap();
+        srv.sugo_create_folder(Parameters(tools::CreateFolderArgs {
+            name: "開発".into(),
+        }))
+        .await
+        .unwrap();
         let err = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap_err();
         assert_eq!(error_code(&err), "conflict");
@@ -2042,7 +2095,9 @@ mod tests {
     async fn sugo_rename_folder_updates_name() {
         let srv = server();
         let created = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap();
         let folder_id = payload(&created)["folder_id"].as_str().unwrap().to_string();
@@ -2076,7 +2131,9 @@ mod tests {
         let srv = server();
         let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
         let f = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap();
         let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();
@@ -2122,7 +2179,9 @@ mod tests {
         let srv = server();
         let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
         let f = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap();
         let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();
@@ -2142,10 +2201,12 @@ mod tests {
         assert_eq!(out["name"], "開発");
         assert_eq!(out["moved_to_uncategorized"], 1);
 
-        assert!(payload(&srv.sugo_list_folders().await.unwrap())["folders"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            payload(&srv.sugo_list_folders().await.unwrap())["folders"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -2165,7 +2226,9 @@ mod tests {
         let srv = server();
         let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
         let f = srv
-            .sugo_create_folder(Parameters(tools::CreateFolderArgs { name: "開発".into() }))
+            .sugo_create_folder(Parameters(tools::CreateFolderArgs {
+                name: "開発".into(),
+            }))
             .await
             .unwrap();
         let folder_id = payload(&f)["folder_id"].as_str().unwrap().to_string();

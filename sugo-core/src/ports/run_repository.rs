@@ -82,7 +82,11 @@ pub mod fake {
             Ok(())
         }
 
-        async fn set_inject_pending(&self, run_id: &str, ts: Option<&str>) -> Result<(), CoreError> {
+        async fn set_inject_pending(
+            &self,
+            run_id: &str,
+            ts: Option<&str>,
+        ) -> Result<(), CoreError> {
             let mut map = self.runs.lock().unwrap();
             if let Some(run) = map.get_mut(run_id) {
                 run.inject_pending_since = ts.map(|s| s.to_string());

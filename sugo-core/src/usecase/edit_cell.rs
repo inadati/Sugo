@@ -85,7 +85,8 @@ pub async fn edit_cell(
     harness.has_draft = def.cells.iter().any(|c| c.status == CellStatus::Draft);
     harness.updated_at = now;
 
-    repo.append_version(&harness, &new_version, expected_lock).await?;
+    repo.append_version(&harness, &new_version, expected_lock)
+        .await?;
 
     Ok(EditCellOutput {
         harness_id: harness.id,
@@ -106,7 +107,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();

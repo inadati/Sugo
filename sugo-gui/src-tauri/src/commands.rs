@@ -1,4 +1,9 @@
-use crate::dto::{ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto, DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto, DraftCellDto, EdgeDto, FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto, UpdateEdgeResultDto};
+use crate::dto::{
+    ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto,
+    DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto, DraftCellDto, EdgeDto,
+    FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto,
+    UpdateEdgeResultDto,
+};
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
 use sugo_core::domain::edge::{Edge, Guard};
@@ -42,9 +47,7 @@ fn map_core_error(e: CoreError) -> String {
 
 /// ハーネス一覧取得
 #[tauri::command]
-pub async fn list_harnesses(
-    state: State<'_, AppState>,
-) -> Result<Vec<HarnessSummaryDto>, String> {
+pub async fn list_harnesses(state: State<'_, AppState>) -> Result<Vec<HarnessSummaryDto>, String> {
     list_harnesses_inner(state.repo.as_ref()).await
 }
 
@@ -398,7 +401,14 @@ pub async fn rename_cell(
     new_name: String,
     lock_version: i64,
 ) -> Result<RenameCellResultDto, String> {
-    rename_cell_inner(state.repo.as_ref(), harness_id, cell_id, new_name, lock_version).await
+    rename_cell_inner(
+        state.repo.as_ref(),
+        harness_id,
+        cell_id,
+        new_name,
+        lock_version,
+    )
+    .await
 }
 
 /// `rename_cell` の実体。repo を直接受け取りテスト可能にする。
@@ -560,7 +570,9 @@ async fn delete_cell_inner(
     }
 
     new_def.cells.retain(|c| c.id != cell_id);
-    new_def.edges.retain(|e| e.from != cell_id && e.to != cell_id);
+    new_def
+        .edges
+        .retain(|e| e.from != cell_id && e.to != cell_id);
 
     let new_version_no = harness.current_version + 1;
     let now = chrono::Local::now().to_rfc3339();
@@ -602,7 +614,16 @@ pub async fn add_edge(
     guard: Option<String>,
     lock_version: i64,
 ) -> Result<AddEdgeResultDto, String> {
-    add_edge_inner(state.repo.as_ref(), harness_id, from, to, label, guard, lock_version).await
+    add_edge_inner(
+        state.repo.as_ref(),
+        harness_id,
+        from,
+        to,
+        label,
+        guard,
+        lock_version,
+    )
+    .await
 }
 
 async fn add_edge_inner(
@@ -694,7 +715,15 @@ pub async fn delete_edge(
     label: String,
     lock_version: i64,
 ) -> Result<DeleteEdgeResultDto, String> {
-    delete_edge_inner(state.repo.as_ref(), harness_id, from, to, label, lock_version).await
+    delete_edge_inner(
+        state.repo.as_ref(),
+        harness_id,
+        from,
+        to,
+        label,
+        lock_version,
+    )
+    .await
 }
 
 async fn delete_edge_inner(
@@ -756,6 +785,7 @@ async fn delete_edge_inner(
 
 /// エッジのラベル/ガードを変更する（from/to/old_label で特定・新 board_version・楽観ロック）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_edge(
     state: State<'_, AppState>,
     harness_id: String,
@@ -766,7 +796,17 @@ pub async fn update_edge(
     new_guard: Option<String>,
     lock_version: i64,
 ) -> Result<UpdateEdgeResultDto, String> {
-    update_edge_inner(state.repo.as_ref(), harness_id, from, to, old_label, new_label, new_guard, lock_version).await
+    update_edge_inner(
+        state.repo.as_ref(),
+        harness_id,
+        from,
+        to,
+        old_label,
+        new_label,
+        new_guard,
+        lock_version,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -914,10 +954,7 @@ pub(crate) async fn purge_harness_inner(
 
 /// ハーネスをゴミ箱に移動する。アクティブ Run が存在する場合は `"active_run"` エラーを返す。
 #[tauri::command]
-pub async fn trash_harness(
-    state: State<'_, AppState>,
-    harness_id: String,
-) -> Result<(), String> {
+pub async fn trash_harness(state: State<'_, AppState>, harness_id: String) -> Result<(), String> {
     // アクティブ Run チェック（get_active_runs と同じ判定）
     let runs = state
         .run_repo
@@ -932,9 +969,7 @@ pub async fn trash_harness(
         .any(|r| {
             let ts = r.last_heartbeat_at.as_deref().unwrap_or(&r.updated_at);
             chrono::DateTime::parse_from_rfc3339(ts)
-                .map(|dt| {
-                    now.signed_duration_since(dt.with_timezone(&chrono::Utc)) < stale_secs
-                })
+                .map(|dt| now.signed_duration_since(dt.with_timezone(&chrono::Utc)) < stale_secs)
                 .unwrap_or(false)
         });
     if has_active {
@@ -946,27 +981,19 @@ pub async fn trash_harness(
 
 /// ゴミ箱からハーネスを復活させる。
 #[tauri::command]
-pub async fn restore_harness(
-    state: State<'_, AppState>,
-    harness_id: String,
-) -> Result<(), String> {
+pub async fn restore_harness(state: State<'_, AppState>, harness_id: String) -> Result<(), String> {
     restore_harness_inner(state.repo.as_ref(), harness_id).await
 }
 
 /// ハーネスを物理削除する（ゴミ箱からのみ呼ぶ）。
 #[tauri::command]
-pub async fn purge_harness(
-    state: State<'_, AppState>,
-    harness_id: String,
-) -> Result<(), String> {
+pub async fn purge_harness(state: State<'_, AppState>, harness_id: String) -> Result<(), String> {
     purge_harness_inner(state.repo.as_ref(), harness_id).await
 }
 
 /// ゴミ箱一覧取得（残り日数付き）。
 #[tauri::command]
-pub async fn list_trash(
-    state: State<'_, AppState>,
-) -> Result<Vec<TrashItemDto>, String> {
+pub async fn list_trash(state: State<'_, AppState>) -> Result<Vec<TrashItemDto>, String> {
     let items = state.repo.list_trash().await.map_err(|e| e.to_string())?;
     let now = chrono::Local::now();
     Ok(items
@@ -974,8 +1001,7 @@ pub async fn list_trash(
         .map(|(id, name, deleted_at)| {
             let remaining_days = chrono::DateTime::parse_from_rfc3339(&deleted_at)
                 .map(|dt| {
-                    let elapsed =
-                        now.signed_duration_since(dt.with_timezone(&chrono::Local));
+                    let elapsed = now.signed_duration_since(dt.with_timezone(&chrono::Local));
                     (180 - elapsed.num_days()).max(0)
                 })
                 .unwrap_or(0);
@@ -991,14 +1017,20 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner, list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner, rename_folder_inner, rename_harness_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
+    use super::{
+        add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner,
+        delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner,
+        list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner,
+        rename_folder_inner, rename_harness_inner, restore_harness_inner, set_cell_memo_inner,
+        trash_harness_inner, update_edge_inner,
+    };
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
     use sugo_core::error::CoreError;
-    use sugo_core::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
     use sugo_core::ports::repository::HarnessRepository;
-    use sugo_core::usecase::create_harness::{create_harness, CreateHarnessInput};
+    use sugo_core::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
+    use sugo_core::usecase::create_harness::{CreateHarnessInput, create_harness};
     use sugo_core::usecase::get_status::get_status;
 
     // ── list_harnesses ──────────────────────────────────────────────────────
@@ -1010,14 +1042,22 @@ mod tests {
         create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
         create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "beta".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "beta".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -1070,7 +1110,11 @@ mod tests {
         let out = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -1102,13 +1146,22 @@ mod tests {
         let out = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
 
         let status = get_status(repo.as_ref(), &out.harness_id).await.unwrap();
-        let c1 = status.definition.cells.iter().find(|c| c.id == "c1").unwrap();
+        let c1 = status
+            .definition
+            .cells
+            .iter()
+            .find(|c| c.id == "c1")
+            .unwrap();
         assert_eq!(c1.prompt, "do the thing");
     }
 
@@ -1128,7 +1181,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -1166,7 +1223,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -1248,7 +1309,11 @@ mod tests {
         create_harness(
             repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap()
@@ -1385,7 +1450,10 @@ mod tests {
 
     #[test]
     fn map_core_error_lock_conflict_is_stable_code() {
-        let e = CoreError::LockConflict { expected: 1, actual: 2 };
+        let e = CoreError::LockConflict {
+            expected: 1,
+            actual: 2,
+        };
         assert_eq!(super::map_core_error(e), "lock_conflict");
     }
 
@@ -1433,9 +1501,17 @@ mod tests {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
         // c1(start) -> draft のエッジを張る
-        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "e".into(), None, lock)
-            .await
-            .unwrap();
+        let add = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "e".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
         // draft を active に昇格させず、非START の draft_id を削除（active/draft 問わず削除可を確認）
         let del = delete_cell_inner(&repo, hid.clone(), draft_id.clone(), add.lock_version)
             .await
@@ -1521,9 +1597,17 @@ mod tests {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
 
-        add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), Some("   ".into()), lock)
-            .await
-            .unwrap();
+        add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            Some("   ".into()),
+            lock,
+        )
+        .await
+        .unwrap();
         let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
         assert!(bv.definition.edges[0].guard.is_none());
     }
@@ -1542,9 +1626,17 @@ mod tests {
     async fn add_edge_inner_rejects_unknown_endpoint() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, _draft_id, lock) = seed_two_cells(&repo).await;
-        let err = add_edge_inner(&repo, hid, "c1".into(), "ghost".into(), "x".into(), None, lock)
-            .await
-            .unwrap_err();
+        let err = add_edge_inner(
+            &repo,
+            hid,
+            "c1".into(),
+            "ghost".into(),
+            "x".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("not found"));
     }
 
@@ -1552,12 +1644,28 @@ mod tests {
     async fn add_edge_inner_rejects_duplicate() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let r1 = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
-            .await
-            .unwrap();
-        let err = add_edge_inner(&repo, hid, "c1".into(), draft_id, "x".into(), None, r1.lock_version)
-            .await
-            .unwrap_err();
+        let r1 = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "x".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
+        let err = add_edge_inner(
+            &repo,
+            hid,
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            None,
+            r1.lock_version,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err, "duplicate_edge");
     }
 
@@ -1575,13 +1683,28 @@ mod tests {
     async fn delete_edge_inner_removes_matching_edge() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
-            .await
-            .unwrap();
+        let add = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "x".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
 
-        let res = delete_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), add.lock_version)
-            .await
-            .unwrap();
+        let res = delete_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            add.lock_version,
+        )
+        .await
+        .unwrap();
         assert_eq!(res.lock_version, add.lock_version + 1);
         let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
         assert!(bv.definition.edges.is_empty());
@@ -1603,13 +1726,27 @@ mod tests {
     async fn update_edge_inner_changes_label_and_guard() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "old".into(), None, lock)
-            .await
-            .unwrap();
+        let add = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "old".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
 
         let res = update_edge_inner(
-            &repo, hid.clone(), "c1".into(), draft_id.clone(),
-            "old".into(), "new".into(), Some("続ける".into()), add.lock_version,
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "old".into(),
+            "new".into(),
+            Some("続ける".into()),
+            add.lock_version,
         )
         .await
         .unwrap();
@@ -1625,11 +1762,26 @@ mod tests {
     async fn update_edge_inner_empty_new_label_rejected() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
-            .await
-            .unwrap();
+        let add = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "x".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
         let err = update_edge_inner(
-            &repo, hid, "c1".into(), draft_id, "x".into(), "   ".into(), None, add.lock_version,
+            &repo,
+            hid,
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            "   ".into(),
+            None,
+            add.lock_version,
         )
         .await
         .unwrap_err();
@@ -1641,7 +1793,14 @@ mod tests {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
         let err = update_edge_inner(
-            &repo, hid, "c1".into(), draft_id, "nope".into(), "y".into(), None, lock,
+            &repo,
+            hid,
+            "c1".into(),
+            draft_id,
+            "nope".into(),
+            "y".into(),
+            None,
+            lock,
         )
         .await
         .unwrap_err();
@@ -1652,12 +1811,29 @@ mod tests {
     async fn update_edge_inner_empty_guard_becomes_none() {
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let add = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), Some("g".into()), lock)
-            .await
-            .unwrap();
-        update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), "x".into(), Some("  ".into()), add.lock_version)
-            .await
-            .unwrap();
+        let add = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "x".into(),
+            Some("g".into()),
+            lock,
+        )
+        .await
+        .unwrap();
+        update_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            "x".into(),
+            Some("  ".into()),
+            add.lock_version,
+        )
+        .await
+        .unwrap();
         let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
         assert!(bv.definition.edges[0].guard.is_none());
     }
@@ -1668,15 +1844,40 @@ mod tests {
         // (from,to,label) 重複になるため duplicate_edge で拒否される。
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let a = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "a".into(), None, lock)
-            .await
-            .unwrap();
-        let b = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "b".into(), None, a.lock_version)
-            .await
-            .unwrap();
-        let err = update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "a".into(), "b".into(), None, b.lock_version)
-            .await
-            .unwrap_err();
+        let a = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "a".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
+        let b = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "b".into(),
+            None,
+            a.lock_version,
+        )
+        .await
+        .unwrap();
+        let err = update_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "a".into(),
+            "b".into(),
+            None,
+            b.lock_version,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err, "duplicate_edge");
         // 両エッジは無傷（2本のまま）
         let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
@@ -1688,12 +1889,29 @@ mod tests {
         // ラベル据え置き（自分自身との衝突）は許容され、ガードのみ変更できる。
         let repo = InMemoryHarnessRepository::new();
         let (hid, draft_id, lock) = seed_two_cells(&repo).await;
-        let a = add_edge_inner(&repo, hid.clone(), "c1".into(), draft_id.clone(), "x".into(), None, lock)
-            .await
-            .unwrap();
-        update_edge_inner(&repo, hid.clone(), "c1".into(), draft_id, "x".into(), "x".into(), Some("g".into()), a.lock_version)
-            .await
-            .unwrap();
+        let a = add_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id.clone(),
+            "x".into(),
+            None,
+            lock,
+        )
+        .await
+        .unwrap();
+        update_edge_inner(
+            &repo,
+            hid.clone(),
+            "c1".into(),
+            draft_id,
+            "x".into(),
+            "x".into(),
+            Some("g".into()),
+            a.lock_version,
+        )
+        .await
+        .unwrap();
         let (_, bv) = repo.get(&hid).await.unwrap().unwrap();
         assert_eq!(bv.definition.edges[0].guard.as_ref().unwrap().expr, "g");
     }
@@ -1705,7 +1923,11 @@ mod tests {
         create_harness(
             repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap()
@@ -1794,7 +2016,9 @@ mod tests {
             .unwrap();
         assert_eq!(list_folders_inner(&repo).await.unwrap()[0].harness_count, 1);
 
-        move_harness_to_folder_inner(&repo, created.harness_id, None).await.unwrap();
+        move_harness_to_folder_inner(&repo, created.harness_id, None)
+            .await
+            .unwrap();
         assert_eq!(list_folders_inner(&repo).await.unwrap()[0].harness_count, 0);
     }
 
@@ -1833,7 +2057,10 @@ mod tests {
             .unwrap();
 
         let listed = list_harnesses_inner(&repo).await.unwrap();
-        let dto = listed.iter().find(|h| h.harness_id == created.harness_id).unwrap();
+        let dto = listed
+            .iter()
+            .find(|h| h.harness_id == created.harness_id)
+            .unwrap();
         assert_eq!(dto.folder_id.as_deref(), Some(f.folder_id.as_str()));
         assert_eq!(dto.folder_name.as_deref(), Some("開発"));
     }
@@ -1968,7 +2195,10 @@ mod tests {
 
         let persisted_name = query_scalar_via_sqlite3_cli(
             db_path_str,
-            &format!("SELECT name FROM folders WHERE id = '{}';", folder.folder_id),
+            &format!(
+                "SELECT name FROM folders WHERE id = '{}';",
+                folder.folder_id
+            ),
         );
         assert_eq!(persisted_name, "実データ確認フォルダ");
 
@@ -1985,7 +2215,9 @@ mod tests {
 
         let repo = SqliteHarnessRepository::open(db_path_str).expect("open real sqlite file");
         let harness = create_harness_inner(&repo, "h".into(), None).await.unwrap();
-        let folder = create_folder_inner(&repo, "一時フォルダ".into()).await.unwrap();
+        let folder = create_folder_inner(&repo, "一時フォルダ".into())
+            .await
+            .unwrap();
         move_harness_to_folder_inner(
             &repo,
             harness.harness_id.clone(),
@@ -2008,11 +2240,17 @@ mod tests {
                 harness.harness_id
             ),
         );
-        assert_eq!(is_null, "1", "削除後は実ファイル上で未分類（NULL）に戻ること");
+        assert_eq!(
+            is_null, "1",
+            "削除後は実ファイル上で未分類（NULL）に戻ること"
+        );
 
         let folder_count =
             query_scalar_via_sqlite3_cli(db_path_str, "SELECT COUNT(*) FROM folders;");
-        assert_eq!(folder_count, "0", "フォルダ行自体は実ファイルから消えていること");
+        assert_eq!(
+            folder_count, "0",
+            "フォルダ行自体は実ファイルから消えていること"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2026,7 +2264,11 @@ mod tests {
         let id = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap()
@@ -2048,14 +2290,22 @@ mod tests {
         create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
         let id = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "beta".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "beta".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap()
@@ -2075,7 +2325,11 @@ mod tests {
         let id = create_harness(
             repo.as_ref(),
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap()

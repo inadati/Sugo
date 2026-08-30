@@ -103,7 +103,11 @@ pub async fn create_harness(
         created_at: now,
     };
     repo.create(&harness, &version).await?;
-    Ok(CreateHarnessOutput { harness_id: harness.id, version_no: 1, lock_version: 0 })
+    Ok(CreateHarnessOutput {
+        harness_id: harness.id,
+        version_no: 1,
+        lock_version: 0,
+    })
 }
 
 #[cfg(test)]
@@ -119,7 +123,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -131,7 +139,11 @@ mod tests {
         assert_eq!(h.name, "h");
         assert!(!v.content_hash.is_empty(), "content_hash must be non-empty");
         // SHA-256 hexadecimal is exactly 64 characters
-        assert_eq!(v.content_hash.len(), 64, "content_hash must be SHA-256 hex (64 chars)");
+        assert_eq!(
+            v.content_hash.len(),
+            64,
+            "content_hash must be SHA-256 hex (64 chars)"
+        );
     }
 
     #[tokio::test]
@@ -156,7 +168,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def.clone()) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def.clone()),
+            },
         )
         .await
         .unwrap();
@@ -198,7 +214,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -213,7 +233,11 @@ mod tests {
         create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -221,7 +245,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "alpha".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -237,7 +265,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "  alpha  ".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "  alpha  ".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -253,7 +285,11 @@ mod tests {
         let err = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "   ".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "   ".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap_err();

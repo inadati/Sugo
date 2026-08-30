@@ -200,7 +200,9 @@ mod tests {
         let clock = FakeIdClock::new();
         create_folder(&repo, &clock, "開発").await.unwrap();
         let b = create_folder(&repo, &clock, "調査").await.unwrap();
-        let err = rename_folder(&repo, &clock, &b.id, "開発").await.unwrap_err();
+        let err = rename_folder(&repo, &clock, &b.id, "開発")
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::Conflict(_)));
     }
 }

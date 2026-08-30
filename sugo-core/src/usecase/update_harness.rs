@@ -734,7 +734,10 @@ mod tests {
         .unwrap();
         let (_, v) = repo.get(&id).await.unwrap().unwrap();
         assert!(!v.definition.cells.iter().any(|c| c.id == "c2"));
-        assert!(v.definition.edges.is_empty(), "edge c1->c2 must be cascaded away");
+        assert!(
+            v.definition.edges.is_empty(),
+            "edge c1->c2 must be cascaded away"
+        );
     }
 
     #[tokio::test]
@@ -762,9 +765,16 @@ mod tests {
         .await
         .unwrap();
         let (_, v) = repo.get(&id).await.unwrap().unwrap();
-        assert_eq!(v.definition.cells.len(), 1, "both c2 and c3 must be removed");
+        assert_eq!(
+            v.definition.cells.len(),
+            1,
+            "both c2 and c3 must be removed"
+        );
         assert_eq!(v.definition.cells[0].id, "c1");
-        assert!(v.definition.edges.is_empty(), "c1->c2 edge must be cascaded away");
+        assert!(
+            v.definition.edges.is_empty(),
+            "c1->c2 edge must be cascaded away"
+        );
     }
 
     #[tokio::test]
@@ -787,7 +797,11 @@ mod tests {
         .unwrap_err();
         match err {
             CoreError::Validation(issues) => {
-                assert!(issues.iter().any(|i| i.code == IssueCode::CannotRemoveStartCell));
+                assert!(
+                    issues
+                        .iter()
+                        .any(|i| i.code == IssueCode::CannotRemoveStartCell)
+                );
             }
             other => panic!("expected Validation error, got {other:?}"),
         }

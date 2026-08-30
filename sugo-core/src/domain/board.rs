@@ -89,7 +89,9 @@ mod tests {
                     from: "c1".into(),
                     to: "c2".into(),
                     label: "next".into(),
-                    guard: Some(Guard { expr: "score > 0".into() }),
+                    guard: Some(Guard {
+                        expr: "score > 0".into(),
+                    }),
                 },
                 Edge {
                     from: "c2".into(),

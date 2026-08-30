@@ -40,7 +40,9 @@ pub async fn delete_harness(
         .any(|r| {
             let ts = r.last_heartbeat_at.as_deref().unwrap_or(&r.updated_at);
             chrono::DateTime::parse_from_rfc3339(ts)
-                .map(|dt| (now - dt.with_timezone(&chrono::Utc)).num_seconds() < ACTIVE_RUN_STALE_SECS)
+                .map(|dt| {
+                    (now - dt.with_timezone(&chrono::Utc)).num_seconds() < ACTIVE_RUN_STALE_SECS
+                })
                 .unwrap_or(false)
         });
     if has_active_run {
@@ -58,14 +60,23 @@ mod tests {
     use crate::ports::run_repository::fake::InMemoryRunRepository;
     use crate::usecase::create_harness::{CreateHarnessInput, create_harness};
 
-    async fn seed() -> (InMemoryHarnessRepository, InMemoryRunRepository, FakeIdClock, String) {
+    async fn seed() -> (
+        InMemoryHarnessRepository,
+        InMemoryRunRepository,
+        FakeIdClock,
+        String,
+    ) {
         let repo = InMemoryHarnessRepository::new();
         let run_repo = InMemoryRunRepository::new();
         let clock = FakeIdClock::new();
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap();
@@ -93,20 +104,41 @@ mod tests {
     #[tokio::test]
     async fn delete_moves_harness_to_trash_when_no_run_exists() {
         let (repo, run_repo, clock, id) = seed().await;
-        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
-            .await
-            .unwrap();
-        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+        delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput {
+                harness_id: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            repo.list_trash()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(hid, _, _)| hid == &id)
+        );
         assert!(repo.list().await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn delete_blocked_by_active_run_within_window() {
         let (repo, run_repo, clock, id) = seed().await;
-        run_repo.create(&running_run(&id, "2026-01-01T00:00:00+09:00")).await.unwrap();
-        let err = delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id })
+        run_repo
+            .create(&running_run(&id, "2026-01-01T00:00:00+09:00"))
             .await
-            .unwrap_err();
+            .unwrap();
+        let err = delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput { harness_id: id },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CoreError::ActiveRunExists));
     }
 
@@ -114,11 +146,27 @@ mod tests {
     async fn delete_allows_when_active_run_is_stale() {
         let (repo, run_repo, clock, id) = seed().await;
         // 12 hours before the fixed clock instant: well past the 300s window.
-        run_repo.create(&running_run(&id, "2025-12-31T12:00:00+09:00")).await.unwrap();
-        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
+        run_repo
+            .create(&running_run(&id, "2025-12-31T12:00:00+09:00"))
             .await
             .unwrap();
-        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+        delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput {
+                harness_id: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            repo.list_trash()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(hid, _, _)| hid == &id)
+        );
     }
 
     #[tokio::test]
@@ -126,10 +174,18 @@ mod tests {
         let (repo, run_repo, clock, id) = seed().await;
         // FakeIdClock's fixed instant is 2026-01-01T00:00:00+09:00; 299s before
         // it is still inside the < 300s active window.
-        run_repo.create(&running_run(&id, "2025-12-31T23:55:01+09:00")).await.unwrap();
-        let err = delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id })
+        run_repo
+            .create(&running_run(&id, "2025-12-31T23:55:01+09:00"))
             .await
-            .unwrap_err();
+            .unwrap();
+        let err = delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput { harness_id: id },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CoreError::ActiveRunExists));
     }
 
@@ -138,21 +194,53 @@ mod tests {
         let (repo, run_repo, clock, id) = seed().await;
         // Exactly 300s before "now": the window is a strict `<`, so 300s elapsed
         // no longer counts as active.
-        run_repo.create(&running_run(&id, "2025-12-31T23:55:00+09:00")).await.unwrap();
-        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
+        run_repo
+            .create(&running_run(&id, "2025-12-31T23:55:00+09:00"))
             .await
             .unwrap();
-        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+        delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput {
+                harness_id: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            repo.list_trash()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(hid, _, _)| hid == &id)
+        );
     }
 
     #[tokio::test]
     async fn delete_allows_at_301_seconds_past_boundary() {
         let (repo, run_repo, clock, id) = seed().await;
-        run_repo.create(&running_run(&id, "2025-12-31T23:54:59+09:00")).await.unwrap();
-        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
+        run_repo
+            .create(&running_run(&id, "2025-12-31T23:54:59+09:00"))
             .await
             .unwrap();
-        assert!(repo.list_trash().await.unwrap().iter().any(|(hid, _, _)| hid == &id));
+        delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput {
+                harness_id: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            repo.list_trash()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(hid, _, _)| hid == &id)
+        );
     }
 
     #[tokio::test]
@@ -171,9 +259,14 @@ mod tests {
         fresh.id = "r-fresh".into();
         run_repo.create(&fresh).await.unwrap();
 
-        let err = delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id })
-            .await
-            .unwrap_err();
+        let err = delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput { harness_id: id },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CoreError::ActiveRunExists));
     }
 
@@ -183,9 +276,16 @@ mod tests {
         let mut r = running_run(&id, "2026-01-01T00:00:00+09:00");
         r.status = RunStatus::Done;
         run_repo.create(&r).await.unwrap();
-        delete_harness(&repo, &run_repo, &clock, DeleteHarnessInput { harness_id: id.clone() })
-            .await
-            .unwrap();
+        delete_harness(
+            &repo,
+            &run_repo,
+            &clock,
+            DeleteHarnessInput {
+                harness_id: id.clone(),
+            },
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -197,7 +297,9 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            DeleteHarnessInput { harness_id: "ghost".into() },
+            DeleteHarnessInput {
+                harness_id: "ghost".into(),
+            },
         )
         .await
         .unwrap_err();

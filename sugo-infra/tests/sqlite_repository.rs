@@ -72,7 +72,9 @@ mod helpers {
                     from: "c1".into(),
                     to: "c2".into(),
                     label: "next".into(),
-                    guard: Some(Guard { expr: "score > 0".into() }),
+                    guard: Some(Guard {
+                        expr: "score > 0".into(),
+                    }),
                 },
                 Edge {
                     from: "c2".into(),
@@ -85,7 +87,12 @@ mod helpers {
     }
 
     /// Builds a BoardVersion with a real content_hash computed from the board.
-    pub fn version(id: &str, harness_id: &str, version_no: i64, def: BoardDefinition) -> BoardVersion {
+    pub fn version(
+        id: &str,
+        harness_id: &str,
+        version_no: i64,
+        def: BoardDefinition,
+    ) -> BoardVersion {
         let content_hash = content_hash(&def);
         BoardVersion {
             id: id.into(),
@@ -182,19 +189,28 @@ async fn version_no_increases_monotonically() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     let (mut h, v1) = helpers::sample();
     repo.create(&h, &v1).await.unwrap();
-    assert_eq!(repo.get_version("h1", 1).await.unwrap().unwrap().version_no, 1);
+    assert_eq!(
+        repo.get_version("h1", 1).await.unwrap().unwrap().version_no,
+        1
+    );
 
     let v2 = version("v2", "h1", 2, board("p2"));
     h.current_version = 2;
     h.lock_version = 1;
     repo.append_version(&h, &v2, 0).await.unwrap();
-    assert_eq!(repo.get_version("h1", 2).await.unwrap().unwrap().version_no, 2);
+    assert_eq!(
+        repo.get_version("h1", 2).await.unwrap().unwrap().version_no,
+        2
+    );
 
     let v3 = version("v3", "h1", 3, board("p3"));
     h.current_version = 3;
     h.lock_version = 2;
     repo.append_version(&h, &v3, 1).await.unwrap();
-    assert_eq!(repo.get_version("h1", 3).await.unwrap().unwrap().version_no, 3);
+    assert_eq!(
+        repo.get_version("h1", 3).await.unwrap().unwrap().version_no,
+        3
+    );
 }
 
 /// (c) UNIQUE(harness_id, version_no): appending a duplicate version_no yields a
@@ -372,10 +388,7 @@ async fn concurrent_appends_one_wins_other_conflicts() {
     let (gh, _) = repo.get("h1").await.unwrap().unwrap();
     assert_eq!(gh.lock_version, 1);
     assert!(gh.current_version == 2 || gh.current_version == 3);
-    let stored_winner = repo
-        .get_version("h1", gh.current_version)
-        .await
-        .unwrap();
+    let stored_winner = repo.get_version("h1", gh.current_version).await.unwrap();
     assert!(stored_winner.is_some());
     // The loser's version was not persisted (no partial state).
     let loser_no = if gh.current_version == 2 { 3 } else { 2 };
@@ -457,7 +470,9 @@ async fn rename_harness_ignores_trashed_harness() {
     let repo = SqliteHarnessRepository::in_memory().unwrap();
     let (h, v) = helpers::sample();
     repo.create(&h, &v).await.unwrap();
-    repo.trash_harness("h1", "2026-08-30T00:00:00+09:00").await.unwrap();
+    repo.trash_harness("h1", "2026-08-30T00:00:00+09:00")
+        .await
+        .unwrap();
 
     let err = repo.rename_harness("h1", "x", "t").await.unwrap_err();
     assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));

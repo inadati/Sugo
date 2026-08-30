@@ -49,9 +49,15 @@ pub fn serde_to_tool_error(e: serde_json::Error) -> ErrorData {
 pub fn nipper_outcome_error(outcome: NipperOutcome) -> Option<ErrorData> {
     let (msg, code) = match outcome {
         NipperOutcome::Ok => return None,
-        NipperOutcome::NoSession => ("no live Nipper chat session for this project_path", "no_session"),
+        NipperOutcome::NoSession => (
+            "no live Nipper chat session for this project_path",
+            "no_session",
+        ),
         NipperOutcome::BadRequest => ("Nipper rejected the request", "bad_request"),
-        NipperOutcome::Unreachable => ("Nipper inject API is unreachable on 127.0.0.1:8771", "nipper_unreachable"),
+        NipperOutcome::Unreachable => (
+            "Nipper inject API is unreachable on 127.0.0.1:8771",
+            "nipper_unreachable",
+        ),
         NipperOutcome::Unauthorized => (
             "Nipper rejected the inject token (mismatch) — Nipper may have been restarted",
             "unauthorized",
@@ -65,7 +71,10 @@ pub fn nipper_outcome_error(outcome: NipperOutcome) -> Option<ErrorData> {
             "token_permission_denied",
         ),
     };
-    Some(ErrorData::internal_error(msg.to_string(), Some(json!({ "code": code }))))
+    Some(ErrorData::internal_error(
+        msg.to_string(),
+        Some(json!({ "code": code })),
+    ))
 }
 
 #[cfg(test)]
@@ -94,7 +103,10 @@ mod tests {
 
     #[test]
     fn maps_lock_conflict_code() {
-        let e = to_tool_error(CoreError::LockConflict { expected: 0, actual: 1 });
+        let e = to_tool_error(CoreError::LockConflict {
+            expected: 0,
+            actual: 1,
+        });
         assert_eq!(code_of(&e), "lock_conflict");
         assert!(e.message.contains("expected 0"));
         assert!(e.message.contains("actual 1"));

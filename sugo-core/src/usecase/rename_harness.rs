@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn appends_2_on_conflict() {
-        assert_eq!(resolve_unique_name(&names(&["alpha"]), "alpha"), "alpha (2)");
+        assert_eq!(
+            resolve_unique_name(&names(&["alpha"]), "alpha"),
+            "alpha (2)"
+        );
     }
 
     #[test]
@@ -114,7 +117,10 @@ mod tests {
     #[test]
     fn already_numbered_name_is_kept_when_free() {
         // 「alpha (2)」への改名で existing に無ければそのまま通る
-        assert_eq!(resolve_unique_name(&names(&["alpha"]), "alpha (2)"), "alpha (2)");
+        assert_eq!(
+            resolve_unique_name(&names(&["alpha"]), "alpha (2)"),
+            "alpha (2)"
+        );
     }
 
     #[test]
@@ -142,13 +148,17 @@ mod tests {
     }
 
     use crate::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
-    use crate::usecase::create_harness::{create_harness, CreateHarnessInput};
+    use crate::usecase::create_harness::{CreateHarnessInput, create_harness};
 
     async fn seed(repo: &InMemoryHarnessRepository, clock: &FakeIdClock, name: &str) -> String {
         create_harness(
             repo,
             clock,
-            CreateHarnessInput { name: name.into(), description: None, definition: None },
+            CreateHarnessInput {
+                name: name.into(),
+                description: None,
+                definition: None,
+            },
         )
         .await
         .unwrap()
@@ -197,7 +207,9 @@ mod tests {
         let clock = FakeIdClock::new();
         let id = seed(&repo, &clock, "alpha").await;
 
-        let final_name = rename_harness(&repo, &clock, &id, "  beta  ").await.unwrap();
+        let final_name = rename_harness(&repo, &clock, &id, "  beta  ")
+            .await
+            .unwrap();
 
         assert_eq!(final_name, "beta");
     }
@@ -220,7 +232,9 @@ mod tests {
         let repo = InMemoryHarnessRepository::new();
         let clock = FakeIdClock::new();
 
-        let err = rename_harness(&repo, &clock, "nope", "beta").await.unwrap_err();
+        let err = rename_harness(&repo, &clock, "nope", "beta")
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, CoreError::NotFound(_)));
     }

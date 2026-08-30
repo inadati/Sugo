@@ -161,9 +161,9 @@ impl RunRepository for SqliteRunRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sqlite::schema::SCHEMA;
     use rusqlite::Connection;
     use sugo_core::domain::run::RunStatus;
-    use crate::sqlite::schema::SCHEMA;
 
     fn repo() -> SqliteRunRepository {
         let conn = Connection::open_in_memory().unwrap();
@@ -234,14 +234,23 @@ mod tests {
     async fn update_heartbeat_persists_timestamp() {
         let r = repo();
         r.create(&sample_run("r1")).await.unwrap();
-        r.update_heartbeat("r1", "2026-06-28T12:00:00+09:00").await.unwrap();
+        r.update_heartbeat("r1", "2026-06-28T12:00:00+09:00")
+            .await
+            .unwrap();
         let got = r.get("r1").await.unwrap().unwrap();
-        assert_eq!(got.last_heartbeat_at.as_deref(), Some("2026-06-28T12:00:00+09:00"));
+        assert_eq!(
+            got.last_heartbeat_at.as_deref(),
+            Some("2026-06-28T12:00:00+09:00")
+        );
     }
 
     #[tokio::test]
     async fn update_heartbeat_unknown_run_is_ok() {
         let r = repo();
-        assert!(r.update_heartbeat("ghost", "2026-06-28T12:00:00+09:00").await.is_ok());
+        assert!(
+            r.update_heartbeat("ghost", "2026-06-28T12:00:00+09:00")
+                .await
+                .is_ok()
+        );
     }
 }

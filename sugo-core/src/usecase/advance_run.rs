@@ -46,7 +46,9 @@ pub async fn advance_run(
     let version = repo
         .get_version(&run.harness_id, run.board_version_no)
         .await?
-        .ok_or_else(|| CoreError::Storage(format!("pinned version {} missing", run.board_version_no)))?;
+        .ok_or_else(|| {
+            CoreError::Storage(format!("pinned version {} missing", run.board_version_no))
+        })?;
 
     let def = &version.definition;
 
@@ -148,20 +150,39 @@ mod tests {
                 },
             ],
             edges: vec![
-                Edge { from: "c1".into(), to: "c2".into(), label: "next".into(), guard: None },
-                Edge { from: "c2".into(), to: "c3".into(), label: "finish".into(), guard: None },
+                Edge {
+                    from: "c1".into(),
+                    to: "c2".into(),
+                    label: "next".into(),
+                    guard: None,
+                },
+                Edge {
+                    from: "c2".into(),
+                    to: "c3".into(),
+                    label: "finish".into(),
+                    guard: None,
+                },
             ],
         }
     }
 
-    async fn setup() -> (InMemoryHarnessRepository, InMemoryRunRepository, FakeIdClock, String) {
+    async fn setup() -> (
+        InMemoryHarnessRepository,
+        InMemoryRunRepository,
+        FakeIdClock,
+        String,
+    ) {
         let repo = InMemoryHarnessRepository::new();
         let run_repo = InMemoryRunRepository::new();
         let clock = FakeIdClock::new();
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(linear_board()) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(linear_board()),
+            },
         )
         .await
         .unwrap();
@@ -169,7 +190,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: h.harness_id.clone(), project_path: None },
+            StartRunInput {
+                harness_id: h.harness_id.clone(),
+                project_path: None,
+            },
         )
         .await
         .unwrap();
@@ -183,7 +207,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "next".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+            },
         )
         .await
         .unwrap();
@@ -204,7 +231,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "next".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+            },
         )
         .await
         .unwrap();
@@ -212,7 +242,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "finish".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "finish".into(),
+            },
         )
         .await
         .unwrap();
@@ -230,7 +263,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "wrong".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "wrong".into(),
+            },
         )
         .await
         .unwrap_err();
@@ -244,7 +280,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "next".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+            },
         )
         .await
         .unwrap();
@@ -252,7 +291,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "finish".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "finish".into(),
+            },
         )
         .await
         .unwrap();
@@ -260,7 +302,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: run_id.clone(), edge_label: "any".into() },
+            AdvanceRunInput {
+                run_id: run_id.clone(),
+                edge_label: "any".into(),
+            },
         )
         .await
         .unwrap_err();
@@ -302,15 +347,34 @@ mod tests {
                 },
             ],
             edges: vec![
-                Edge { from: "c1".into(), to: "c2".into(), label: "go".into(), guard: None },
-                Edge { from: "c2".into(), to: "c1".into(), label: "loop".into(), guard: None },
-                Edge { from: "c2".into(), to: "c3".into(), label: "exit".into(), guard: None },
+                Edge {
+                    from: "c1".into(),
+                    to: "c2".into(),
+                    label: "go".into(),
+                    guard: None,
+                },
+                Edge {
+                    from: "c2".into(),
+                    to: "c1".into(),
+                    label: "loop".into(),
+                    guard: None,
+                },
+                Edge {
+                    from: "c2".into(),
+                    to: "c3".into(),
+                    label: "exit".into(),
+                    guard: None,
+                },
             ],
         };
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "loop".into(), description: None, definition: Some(loop_board) },
+            CreateHarnessInput {
+                name: "loop".into(),
+                description: None,
+                definition: Some(loop_board),
+            },
         )
         .await
         .unwrap();
@@ -318,7 +382,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: h.harness_id.clone(), project_path: None },
+            StartRunInput {
+                harness_id: h.harness_id.clone(),
+                project_path: None,
+            },
         )
         .await
         .unwrap();
@@ -326,7 +393,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: s.run_id.clone(), edge_label: "go".into() },
+            AdvanceRunInput {
+                run_id: s.run_id.clone(),
+                edge_label: "go".into(),
+            },
         )
         .await
         .unwrap();
@@ -334,7 +404,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: s.run_id.clone(), edge_label: "loop".into() },
+            AdvanceRunInput {
+                run_id: s.run_id.clone(),
+                edge_label: "loop".into(),
+            },
         )
         .await
         .unwrap();
@@ -381,20 +454,28 @@ mod tests {
                     from: "c1".into(),
                     to: "c2".into(),
                     label: "left".into(),
-                    guard: Some(Guard { expr: "score < 5".into() }),
+                    guard: Some(Guard {
+                        expr: "score < 5".into(),
+                    }),
                 },
                 Edge {
                     from: "c1".into(),
                     to: "c3".into(),
                     label: "right".into(),
-                    guard: Some(Guard { expr: "score >= 5".into() }),
+                    guard: Some(Guard {
+                        expr: "score >= 5".into(),
+                    }),
                 },
             ],
         };
         let h = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "branch".into(), description: None, definition: Some(branch_board) },
+            CreateHarnessInput {
+                name: "branch".into(),
+                description: None,
+                definition: Some(branch_board),
+            },
         )
         .await
         .unwrap();
@@ -402,7 +483,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            StartRunInput { harness_id: h.harness_id.clone(), project_path: None },
+            StartRunInput {
+                harness_id: h.harness_id.clone(),
+                project_path: None,
+            },
         )
         .await
         .unwrap();
@@ -410,7 +494,10 @@ mod tests {
             &repo,
             &run_repo,
             &clock,
-            AdvanceRunInput { run_id: s.run_id, edge_label: "right".into() },
+            AdvanceRunInput {
+                run_id: s.run_id,
+                edge_label: "right".into(),
+            },
         )
         .await
         .unwrap();

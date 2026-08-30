@@ -6,6 +6,6 @@
 //! harnesses and their immutable board versions to SQLite. The core depends on
 //! the port traits, not on this crate.
 
-pub mod sqlite;
 pub mod jsonl_watcher;
 pub mod paths;
+pub mod sqlite;

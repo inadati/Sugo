@@ -143,10 +143,7 @@ pub async fn list_harness_summaries(
     Ok(harnesses
         .into_iter()
         .map(|h| {
-            let folder_name = h
-                .folder_id
-                .as_ref()
-                .and_then(|id| names.get(id).cloned());
+            let folder_name = h.folder_id.as_ref().and_then(|id| names.get(id).cloned());
             HarnessSummary {
                 harness_id: h.id,
                 name: h.name,
@@ -202,7 +199,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -259,7 +260,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -332,7 +337,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -422,7 +431,11 @@ mod tests {
         let out = create_harness(
             &repo,
             &clock,
-            CreateHarnessInput { name: "h".into(), description: None, definition: Some(def) },
+            CreateHarnessInput {
+                name: "h".into(),
+                description: None,
+                definition: Some(def),
+            },
         )
         .await
         .unwrap();
@@ -440,7 +453,11 @@ mod tests {
             create_harness(
                 &repo,
                 &clock,
-                CreateHarnessInput { name: n.into(), description: None, definition: None },
+                CreateHarnessInput {
+                    name: n.into(),
+                    description: None,
+                    definition: None,
+                },
             )
             .await
             .unwrap();
@@ -463,7 +480,9 @@ mod tests {
             .unwrap();
         let (h, v) = crate::ports::repository::fake::sample_harness("h1");
         repo.create(&h, &v).await.unwrap();
-        repo.move_harness_to_folder("h1", Some(&f.id)).await.unwrap();
+        repo.move_harness_to_folder("h1", Some(&f.id))
+            .await
+            .unwrap();
 
         let summaries = list_harness_summaries(&repo).await.unwrap();
         assert_eq!(summaries[0].folder_id.as_deref(), Some(f.id.as_str()));
