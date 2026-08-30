@@ -3,6 +3,7 @@ import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import HarnessList from "./HarnessList.vue";
+import FolderNameDialog from "../components/FolderNameDialog.vue";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
@@ -208,5 +209,48 @@ describe("HarnessList – 右クリックでのフォルダ移動が失敗した
     expect(wrapper.text()).toContain("失敗しました");
     const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
     expect(callsAfter).toBe(callsBefore);
+  });
+});
+
+describe("HarnessList – 右クリックからの改名", () => {
+  it("メニューの rename で改名ダイアログが開き、保存後に一覧を再取得する", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.findAll("[data-testid='harness-row']")[0].trigger("contextmenu");
+    await wrapper.find("[data-testid='rename-from-menu']").trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const dialog = wrapper.findComponent(FolderNameDialog);
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.props("entity")).toBe("harness");
+    expect(dialog.props("harnessId")).toBe("h1");
+    expect(dialog.props("initialName")).toBe("alpha");
+
+    const callsBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    dialog.vm.$emit("saved");
+    await new Promise((r) => setTimeout(r, 0));
+    const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+    expect(wrapper.findComponent(FolderNameDialog).exists()).toBe(false);
+  });
+
+  it("改名ダイアログが not-found を通知したらトーストを表示し一覧を再取得する", async () => {
+    const wrapper = mount(HarnessList, { global: { plugins: [makeRouter()] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.findAll("[data-testid='harness-row']")[0].trigger("contextmenu");
+    await wrapper.find("[data-testid='rename-from-menu']").trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const dialog = wrapper.findComponent(FolderNameDialog);
+    const callsBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    dialog.vm.$emit("not-found");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.text()).toContain("見つかりません");
+    const callsAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "list_harnesses").length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+    expect(wrapper.findComponent(FolderNameDialog).exists()).toBe(false);
   });
 });

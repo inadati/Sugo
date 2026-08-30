@@ -87,8 +87,21 @@
       :current-folder-id="contextMenu.currentFolderId"
       :folders="folders"
       @move="onMoveFromMenu"
+      @rename="onRenameFromMenu"
       @trash="onTrashFromMenu"
       @close="contextMenu = null"
+    />
+
+    <!-- 改名ダイアログ -->
+    <FolderNameDialog
+      v-if="renameTarget"
+      mode="rename"
+      entity="harness"
+      :harness-id="renameTarget.harness_id"
+      :initial-name="renameTarget.name"
+      @close="renameTarget = null"
+      @saved="onRenameSaved"
+      @not-found="onRenameNotFound"
     />
 
     <!-- トースト -->
@@ -107,6 +120,7 @@ import { useRoute, useRouter } from "vue-router";
 import { TrashIcon } from "@heroicons/vue/24/outline";
 import NewHarnessDialog from "../components/NewHarnessDialog.vue";
 import HarnessContextMenu from "../components/HarnessContextMenu.vue";
+import FolderNameDialog from "../components/FolderNameDialog.vue";
 import { useToast } from "../composables/useToast";
 
 interface HarnessSummary {
@@ -145,6 +159,7 @@ const trashTarget = ref<HarnessSummary | null>(null);
 const trashError = ref<string | null>(null);
 const showCreate = ref(false);
 const contextMenu = ref<ContextMenuState | null>(null);
+const renameTarget = ref<HarnessSummary | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // 現在のルートから表示スコープを導出する。
@@ -250,6 +265,27 @@ function onTrashFromMenu(harnessId: string) {
   contextMenu.value = null;
   const target = harnesses.value.find((h) => h.harness_id === harnessId);
   if (target) confirmTrash(target);
+}
+
+function onRenameFromMenu(harnessId: string) {
+  contextMenu.value = null;
+  const target = harnesses.value.find((h) => h.harness_id === harnessId);
+  if (target) renameTarget.value = target;
+}
+
+async function onRenameSaved() {
+  renameTarget.value = null;
+  await fetchHarnesses();
+}
+
+/**
+ * 改名ダイアログから NotFound を通知された際の共通処理。
+ * 別ウィンドウ／MCP 経由でハーネスが削除された場合に到達する。
+ */
+async function onRenameNotFound() {
+  renameTarget.value = null;
+  showToast("ハーネスが見つかりません。一覧を更新しました。");
+  await fetchHarnesses();
 }
 
 onMounted(() => {
