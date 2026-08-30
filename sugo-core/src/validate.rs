@@ -46,6 +46,8 @@ pub enum IssueCode {
     CannotRemoveStartCell,
     /// フォルダ名が空、または64文字を超えている。
     InvalidFolderName,
+    /// ハーネス名が空、または64文字を超えている。
+    InvalidHarnessName,
 }
 
 /// A single problem found while validating a board definition.

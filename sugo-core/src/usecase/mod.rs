@@ -15,6 +15,7 @@ pub mod edit_cell;
 pub mod folder;
 pub mod get_status;
 pub mod lease;
+pub mod rename_harness;
 pub mod start_run;
 pub mod update_harness;
 pub mod validate_harness;
