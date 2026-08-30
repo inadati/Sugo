@@ -56,6 +56,7 @@ pub struct CreateHarnessInput {
 }
 
 /// Output of [`create_harness`].
+#[derive(Debug)]
 pub struct CreateHarnessOutput {
     /// Id of the newly created harness.
     pub harness_id: String,
@@ -75,12 +76,16 @@ pub async fn create_harness(
     clock: &dyn IdClock,
     input: CreateHarnessInput,
 ) -> Result<CreateHarnessOutput, CoreError> {
+    let desired = crate::usecase::rename_harness::normalize_name(&input.name)?;
+    let existing: Vec<String> = repo.list().await?.into_iter().map(|h| h.name).collect();
+    let name = crate::usecase::rename_harness::resolve_unique_name(&existing, &desired);
+
     let def = input.definition.unwrap_or_else(default_board);
     let has_draft = def.cells.iter().any(|c| c.status == CellStatus::Draft);
     let now = clock.now_iso();
     let harness = Harness {
         id: clock.new_id(),
-        name: input.name,
+        name,
         description: input.description,
         folder_id: None,
         current_version: 1,
@@ -199,6 +204,61 @@ mod tests {
         .unwrap();
         let (h, _v) = repo.get(&out.harness_id).await.unwrap().unwrap();
         assert!(h.has_draft);
+    }
+
+    #[tokio::test]
+    async fn creating_with_an_existing_name_gets_numbered() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap();
+
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap();
+
+        let (h, _) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        assert_eq!(h.name, "alpha (2)");
+    }
+
+    #[tokio::test]
+    async fn creating_trims_the_name() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let out = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "  alpha  ".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap();
+
+        let (h, _) = repo.get(&out.harness_id).await.unwrap().unwrap();
+        assert_eq!(h.name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn creating_with_an_empty_name_is_rejected() {
+        let repo = InMemoryHarnessRepository::new();
+        let clock = FakeIdClock::new();
+        let err = create_harness(
+            &repo,
+            &clock,
+            CreateHarnessInput { name: "   ".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, crate::error::CoreError::Validation(_)));
     }
 
     #[test]
