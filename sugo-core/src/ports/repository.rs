@@ -68,6 +68,15 @@ pub trait HarnessRepository: Send + Sync {
     async fn purge_trash_before(&self, before_iso: &str) -> Result<(), CoreError>;
     /// ハーネスの説明文を更新する（description カラムのみ更新、ボードバージョンは変更しない）。
     async fn set_description(&self, id: &str, description: Option<&str>) -> Result<(), CoreError>;
+    /// ハーネス名を更新する（name と updated_at のみ更新、ボードバージョンは変更しない）。
+    /// ゴミ箱内のハーネスは対象外。`id` が存在しない場合は `CoreError::NotFound`。
+    /// 名前の重複解決は usecase 層の責務であり、ここでは行わない。
+    async fn rename_harness(
+        &self,
+        id: &str,
+        name: &str,
+        updated_at: &str,
+    ) -> Result<(), CoreError>;
 
     /// フォルダ一覧を返す。各要素は `(フォルダ, 所属する未削除ハーネスの件数)`。
     /// `sort_order` の昇順で返すこと。
@@ -324,6 +333,24 @@ pub mod fake {
             Ok(())
         }
 
+        async fn rename_harness(
+            &self,
+            id: &str,
+            name: &str,
+            updated_at: &str,
+        ) -> Result<(), CoreError> {
+            let deleted = self.deleted_at.lock().unwrap();
+            if deleted.contains_key(id) {
+                return Err(CoreError::NotFound(id.to_string()));
+            }
+            drop(deleted);
+            let mut hs = self.harnesses.lock().unwrap();
+            let h = hs.get_mut(id).ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+            h.name = name.to_string();
+            h.updated_at = updated_at.to_string();
+            Ok(())
+        }
+
         async fn list_folders(&self) -> Result<Vec<(Folder, i64)>, CoreError> {
             let folders = self.folders.lock().unwrap();
             let hs = self.harnesses.lock().unwrap();
@@ -454,7 +481,7 @@ pub mod fake {
 
 #[cfg(test)]
 mod fake_tests {
-    use super::fake::InMemoryHarnessRepository;
+    use super::fake::{sample_harness, InMemoryHarnessRepository};
     use super::*;
     use crate::domain::folder::Folder;
 
@@ -540,6 +567,42 @@ mod fake_tests {
             .rename_folder("ghost", "新名称", "2026-08-26T00:00:00+09:00")
             .await
             .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn fake_rename_harness_updates_name_and_updated_at() {
+        let repo = InMemoryHarnessRepository::new();
+        let (h, v) = sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+
+        repo.rename_harness("h1", "renamed", "2026-08-30T12:00:00+09:00")
+            .await
+            .unwrap();
+
+        let (got, _) = repo.get("h1").await.unwrap().unwrap();
+        assert_eq!(got.name, "renamed");
+        assert_eq!(got.updated_at, "2026-08-30T12:00:00+09:00");
+    }
+
+    #[tokio::test]
+    async fn fake_rename_harness_unknown_id_is_not_found() {
+        let repo = InMemoryHarnessRepository::new();
+        let err = repo
+            .rename_harness("nope", "x", "t")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn fake_rename_harness_rejects_trashed_harness() {
+        let repo = InMemoryHarnessRepository::new();
+        let (h, v) = sample_harness("h1");
+        repo.create(&h, &v).await.unwrap();
+        repo.trash_harness("h1", "2026-08-30T00:00:00+09:00").await.unwrap();
+
+        let err = repo.rename_harness("h1", "x", "t").await.unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
     }
 
