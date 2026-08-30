@@ -388,6 +388,27 @@ impl HarnessRepository for SqliteHarnessRepository {
         }
     }
 
+    async fn rename_harness(
+        &self,
+        id: &str,
+        name: &str,
+        updated_at: &str,
+    ) -> Result<(), CoreError> {
+        let conn = self.lock();
+        let affected = conn
+            .execute(
+                "UPDATE harnesses SET name = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND deleted_at IS NULL",
+                rusqlite::params![name, updated_at, id],
+            )
+            .map_err(map_err)?;
+        if affected == 0 {
+            Err(CoreError::NotFound(id.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
     async fn list_folders(&self) -> Result<Vec<(Folder, i64)>, CoreError> {
         let conn = self.lock();
         let mut stmt = conn

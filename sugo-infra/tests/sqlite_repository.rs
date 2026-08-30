@@ -416,6 +416,53 @@ async fn unique_violation_after_lock_check_rolls_back() {
     assert_eq!(stored_v2.definition.cells[0].prompt, "p2");
 }
 
+#[tokio::test]
+async fn rename_harness_updates_name_and_updated_at() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    let (h, v) = helpers::sample();
+    repo.create(&h, &v).await.unwrap();
+
+    repo.rename_harness("h1", "renamed", "2026-08-30T12:00:00+09:00")
+        .await
+        .unwrap();
+
+    let (got, _) = repo.get("h1").await.unwrap().unwrap();
+    assert_eq!(got.name, "renamed");
+    assert_eq!(got.updated_at, "2026-08-30T12:00:00+09:00");
+}
+
+#[tokio::test]
+async fn rename_harness_does_not_bump_board_version() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    let (h, v) = helpers::sample();
+    repo.create(&h, &v).await.unwrap();
+
+    repo.rename_harness("h1", "renamed", "t").await.unwrap();
+
+    let (got, gv) = repo.get("h1").await.unwrap().unwrap();
+    assert_eq!(got.current_version, 1);
+    assert_eq!(got.lock_version, 0);
+    assert_eq!(gv.version_no, 1);
+}
+
+#[tokio::test]
+async fn rename_harness_unknown_id_returns_not_found() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    let err = repo.rename_harness("nope", "x", "t").await.unwrap_err();
+    assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn rename_harness_ignores_trashed_harness() {
+    let repo = SqliteHarnessRepository::in_memory().unwrap();
+    let (h, v) = helpers::sample();
+    repo.create(&h, &v).await.unwrap();
+    repo.trash_harness("h1", "2026-08-30T00:00:00+09:00").await.unwrap();
+
+    let err = repo.rename_harness("h1", "x", "t").await.unwrap_err();
+    assert!(matches!(err, sugo_core::error::CoreError::NotFound(_)));
+}
+
 // --- contract-test-parity: run sugo-core's shared contract functions against
 // SqliteHarnessRepository ---
 // Mechanically guarantees that the fake (InMemoryHarnessRepository) and sqlite
