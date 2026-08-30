@@ -88,4 +88,38 @@ describe("FolderNameDialog", () => {
     expect(wrapper.emitted("not-found")).toBeUndefined();
     expect(wrapper.emitted("close")).toBeUndefined();
   });
+
+  it("entity=harness のとき rename_harness を invoke する", async () => {
+    vi.mocked(invoke).mockResolvedValue({});
+    const wrapper = mount(FolderNameDialog, {
+      props: { mode: "rename", entity: "harness", harnessId: "h1", initialName: "alpha" },
+    });
+    await wrapper.get('[data-testid="folder-name"]').setValue("beta");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(invoke).toHaveBeenCalledWith("rename_harness", { harnessId: "h1", name: "beta" });
+    expect(wrapper.emitted("saved")).toBeTruthy();
+  });
+
+  it("entity=harness のとき見出しとラベルがハーネス向けになる", () => {
+    const wrapper = mount(FolderNameDialog, {
+      props: { mode: "rename", entity: "harness", harnessId: "h1", initialName: "alpha" },
+    });
+    expect(wrapper.text()).toContain("ハーネス名を変更");
+    expect(wrapper.text()).not.toContain("フォルダ名を変更");
+  });
+
+  it("entity=harness で空名を弾くメッセージがハーネス向けになる", async () => {
+    const wrapper = mount(FolderNameDialog, {
+      props: { mode: "rename", entity: "harness", harnessId: "h1", initialName: "alpha" },
+    });
+    const callsBefore = vi.mocked(invoke).mock.calls.length;
+    await wrapper.get('[data-testid="folder-name"]').setValue("   ");
+    await wrapper.get('[data-testid="folder-submit"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.text()).toContain("ハーネス名を入力してください。");
+    expect(vi.mocked(invoke).mock.calls.length).toBe(callsBefore);
+  });
 });
