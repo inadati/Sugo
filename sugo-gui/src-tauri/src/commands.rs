@@ -128,6 +128,30 @@ async fn rename_folder_inner(
         .map_err(map_core_error)
 }
 
+/// ハーネス名を変更する（メタデータのみ更新・新 board_version を作らない）。
+///
+/// 同名のハーネスが既にある場合は `名前 (2)` の形で自動採番され、確定した
+/// 名前が返る。実体は [`rename_harness_inner`] にあり、本コマンドは薄いラッパ。
+#[tauri::command]
+pub async fn rename_harness(
+    state: State<'_, AppState>,
+    harness_id: String,
+    name: String,
+) -> Result<String, String> {
+    rename_harness_inner(state.repo.as_ref(), harness_id, name).await
+}
+
+/// `rename_harness` の実体。repo を直接受け取りテスト可能にする。
+async fn rename_harness_inner(
+    repo: &dyn HarnessRepository,
+    harness_id: String,
+    name: String,
+) -> Result<String, String> {
+    sugo_core::usecase::rename_harness::rename_harness(repo, &GuiIdClock, &harness_id, &name)
+        .await
+        .map_err(map_core_error)
+}
+
 /// フォルダを削除する。所属ハーネスは削除せず未分類に戻す。
 #[tauri::command]
 pub async fn delete_folder(
@@ -967,7 +991,7 @@ pub async fn list_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner, list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner, rename_folder_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
+    use super::{add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner, delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner, list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner, rename_folder_inner, rename_harness_inner, restore_harness_inner, set_cell_memo_inner, trash_harness_inner, update_edge_inner};
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -1991,5 +2015,88 @@ mod tests {
         assert_eq!(folder_count, "0", "フォルダ行自体は実ファイルから消えていること");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── rename_harness ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_harness_inner_changes_name_and_returns_it() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let clock = FakeIdClock::new();
+        let id = create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap()
+        .harness_id;
+
+        let name = rename_harness_inner(repo.as_ref(), id.clone(), "beta".into())
+            .await
+            .unwrap();
+
+        assert_eq!(name, "beta");
+        let (h, _) = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(h.name, "beta");
+    }
+
+    #[tokio::test]
+    async fn rename_harness_inner_numbers_duplicate_name() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let clock = FakeIdClock::new();
+        create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap();
+        let id = create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "beta".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap()
+        .harness_id;
+
+        let name = rename_harness_inner(repo.as_ref(), id, "alpha".into())
+            .await
+            .unwrap();
+
+        assert_eq!(name, "alpha (2)");
+    }
+
+    #[tokio::test]
+    async fn rename_harness_inner_rejects_empty_name() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let clock = FakeIdClock::new();
+        let id = create_harness(
+            repo.as_ref(),
+            &clock,
+            CreateHarnessInput { name: "alpha".into(), description: None, definition: None },
+        )
+        .await
+        .unwrap()
+        .harness_id;
+
+        let err = rename_harness_inner(repo.as_ref(), id, "   ".into())
+            .await
+            .unwrap_err();
+
+        // map_core_error は Validation の Display をそのまま返すため、日本語
+        // メッセージではなく "validation failed with 1 issue(s)" になる。
+        // 空名はダイアログ側でも弾くので、ここは到達時の型だけを担保する。
+        assert!(err.contains("validation failed"), "actual: {err}");
+    }
+
+    #[tokio::test]
+    async fn rename_harness_inner_unknown_id_returns_not_found() {
+        let repo = Arc::new(InMemoryHarnessRepository::new());
+        let err = rename_harness_inner(repo.as_ref(), "nope".into(), "beta".into())
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"), "actual: {err}");
     }
 }
