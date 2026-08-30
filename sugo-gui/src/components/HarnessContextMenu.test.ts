@@ -33,6 +33,17 @@ describe("HarnessContextMenu", () => {
     expect(wrapper.emitted("move")![0]).toEqual([{ harnessId: "h1", folderId: null }]);
   });
 
+  it("「名前を変更」クリックで rename と close を emit する", async () => {
+    const wrapper = mount(HarnessContextMenu, {
+      props: { x: 0, y: 0, harnessId: "h1", currentFolderId: null, folders: [] },
+    });
+
+    await wrapper.find('[data-testid="rename-from-menu"]').trigger("click");
+
+    expect(wrapper.emitted("rename")).toEqual([["h1"]]);
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
   it("ゴミ箱へ移動を選ぶと trash イベントを発火する", async () => {
     const wrapper = mount(HarnessContextMenu, {
       props: { x: 0, y: 0, harnessId: "h1", currentFolderId: null, folders },

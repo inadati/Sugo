@@ -30,6 +30,15 @@
     <div class="border-t border-gray-100 my-1" />
 
     <button
+      data-testid="rename-from-menu"
+      class="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700"
+      @click="$emit('rename', harnessId); $emit('close')"
+    >
+      <PencilIcon class="w-3.5 h-3.5" />
+      名前を変更
+    </button>
+
+    <button
       data-testid="trash-from-menu"
       class="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-gray-100 text-red-500"
       @click="$emit('trash', harnessId); $emit('close')"
@@ -43,7 +52,7 @@
 <script setup lang="ts">
 // ハーネス行の右クリックで開くコンテキストメニュー。
 // 「フォルダへ移動」（フォルダ一覧＋未分類）と「ゴミ箱へ移動」を提示する。
-import { CheckIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import { CheckIcon, PencilIcon, TrashIcon } from "@heroicons/vue/24/outline";
 
 interface FolderSummary {
   folder_id: string;
@@ -61,6 +70,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   move: [payload: { harnessId: string; folderId: string | null }];
+  rename: [harnessId: string];
   trash: [harnessId: string];
   close: [];
 }>();
