@@ -630,6 +630,39 @@ impl SugoServer {
         )]))
     }
 
+    /// Rename a harness (metadata only; no new board version is created).
+    #[tool(
+        description = "Rename a harness. Metadata only — no new board version is created and \
+        running runs are unaffected. If another harness already has the requested name, a \
+        number is appended automatically (\"name\" -> \"name (2)\"), taking the smallest free \
+        number; renaming a harness to its own current name is a no-op rather than a bump. \
+        Duplicate names are never an error. Returns { harness_id, name } where name is the \
+        final name actually stored, which may differ from the requested one."
+    )]
+    async fn sugo_rename_harness(
+        &self,
+        Parameters(args): Parameters<tools::RenameHarnessArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::rename_harness::rename_harness;
+
+        let final_name = rename_harness(
+            self.repo.as_ref(),
+            self.clock.as_ref(),
+            &args.harness_id,
+            &args.name,
+        )
+        .await
+        .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({
+            "harness_id": args.harness_id,
+            "name": final_name,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
     /// Move a harness to the trash (soft delete).
     #[tool(
         description = "Move a harness to the trash (soft delete; deleted_at is set). \

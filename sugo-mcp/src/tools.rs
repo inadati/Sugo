@@ -46,6 +46,15 @@ pub struct SetDescriptionArgs {
     pub description: Option<String>,
 }
 
+/// Arguments for `sugo_rename_harness`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenameHarnessArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// New harness name. Leading/trailing whitespace is trimmed.
+    pub name: String,
+}
+
 /// Arguments for `sugo_delete_harness`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DeleteHarnessArgs {
