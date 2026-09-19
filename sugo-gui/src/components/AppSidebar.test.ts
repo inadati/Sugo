@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import AppSidebar from "./AppSidebar.vue";
+import {
+  useSidebarWidth,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from "../composables/useSidebarWidth";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
@@ -190,5 +196,101 @@ describe("AppSidebar – フォルダ改名の異常系", () => {
     // ダイアログは閉じずに残り、エラーはダイアログ内に表示される
     expect(wrapper.find('[data-testid="folder-name"]').exists()).toBe(true);
     expect(wrapper.text()).toContain("既に存在");
+  });
+});
+
+describe("AppSidebar – 幅のリサイズ", () => {
+  beforeEach(() => {
+    // useSidebarWidth はモジュールスコープで幅を共有するため、
+    // テスト間で持ち越さないよう毎回既定値へ戻す。
+    localStorage.clear();
+    useSidebarWidth().resetWidth();
+  });
+
+  async function mountSidebar() {
+    const router = makeRouter();
+    const wrapper = mount(AppSidebar, { global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+    return wrapper;
+  }
+
+  it("既定幅でレンダリングする", async () => {
+    const wrapper = await mountSidebar();
+    expect(wrapper.get("nav").attributes("style")).toContain(`width: ${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it("ハンドルをドラッグした分だけ幅が変わる", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 260, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).toContain(
+      `width: ${SIDEBAR_DEFAULT_WIDTH + 60}px`
+    );
+  });
+
+  it("pointerdown なしの pointermove では幅が変わらない", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointermove", { clientX: 400, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).toContain(`width: ${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it("pointerup 後の pointermove では幅が変わらない", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 240, pointerId: 1 });
+    await handle.trigger("pointerup", { clientX: 240, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 400, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).toContain(
+      `width: ${SIDEBAR_DEFAULT_WIDTH + 40}px`
+    );
+  });
+
+  it("下限・上限を超えてドラッグしてもクランプされる", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: -9999, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).toContain(`width: ${SIDEBAR_MIN_WIDTH}px`);
+    await handle.trigger("pointermove", { clientX: 9999, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).toContain(`width: ${SIDEBAR_MAX_WIDTH}px`);
+  });
+
+  it("ダブルクリックで既定幅に戻る", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 320, pointerId: 1 });
+    await handle.trigger("pointerup", { clientX: 320, pointerId: 1 });
+    expect(wrapper.get("nav").attributes("style")).not.toContain(
+      `width: ${SIDEBAR_DEFAULT_WIDTH}px`
+    );
+    await handle.trigger("dblclick");
+    expect(wrapper.get("nav").attributes("style")).toContain(`width: ${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it("ドラッグした幅は再マウント後も復元される", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    await handle.trigger("pointermove", { clientX: 290, pointerId: 1 });
+    await handle.trigger("pointerup", { clientX: 290, pointerId: 1 });
+    wrapper.unmount();
+
+    const again = await mountSidebar();
+    expect(again.get("nav").attributes("style")).toContain(
+      `width: ${SIDEBAR_DEFAULT_WIDTH + 90}px`
+    );
+  });
+
+  it("ドラッグ中にアンマウントしても body の選択禁止が残らない", async () => {
+    const wrapper = await mountSidebar();
+    const handle = wrapper.get('[data-testid="sidebar-resize-handle"]');
+    await handle.trigger("pointerdown", { clientX: 200, pointerId: 1 });
+    expect(document.body.style.userSelect).toBe("none");
+    wrapper.unmount();
+    expect(document.body.style.userSelect).toBe("");
   });
 });

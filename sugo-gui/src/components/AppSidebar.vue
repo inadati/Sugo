@@ -1,5 +1,29 @@
 <template>
-  <nav class="w-[200px] shrink-0 bg-white border-r border-gray-200 flex flex-col py-2 gap-0.5">
+  <nav
+    class="relative shrink-0 bg-white border-r border-gray-200 flex flex-col py-2 gap-0.5"
+    :style="{ width: `${width}px` }"
+  >
+    <!--
+      右端のリサイズハンドル。幅 1px の枠線の上に、掴みやすい 4px の当たり判定を
+      重ねる。pointer capture を使うので、ポインタがサイドバーの外に出ても
+      ドラッグが途切れない。ダブルクリックで既定幅に戻る。
+    -->
+    <div
+      data-testid="sidebar-resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      :aria-label="`サイドバーの幅（現在 ${width}px）`"
+      :aria-valuenow="width"
+      :aria-valuemin="SIDEBAR_MIN_WIDTH"
+      :aria-valuemax="SIDEBAR_MAX_WIDTH"
+      class="absolute top-0 -right-0.5 z-10 h-full w-1 cursor-col-resize hover:bg-blue-300/60"
+      :class="{ 'bg-blue-400/70': resizing }"
+      @pointerdown="onResizeStart"
+      @pointermove="onResizeMove"
+      @pointerup="onResizeEnd"
+      @pointercancel="onResizeEnd"
+      @dblclick="resetWidth"
+    />
     <RouterLink
       to="/"
       exact-active-class="bg-gray-100 font-medium"
@@ -117,6 +141,11 @@ import { useRoute, useRouter } from "vue-router";
 import { TrashIcon, ListBulletIcon, InboxIcon, FolderIcon, PencilIcon } from "@heroicons/vue/24/outline";
 import FolderNameDialog from "./FolderNameDialog.vue";
 import { useToast } from "../composables/useToast";
+import {
+  useSidebarWidth,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from "../composables/useSidebarWidth";
 
 interface FolderSummary {
   folder_id: string;
@@ -137,6 +166,36 @@ const showCreateDialog = ref(false);
 const renameTarget = ref<FolderSummary | null>(null);
 const dragOverId = ref<string | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+const { width, setWidth, resetWidth } = useSidebarWidth();
+const resizing = ref(false);
+// ドラッグ開始時のポインタ位置と幅。移動量から幅を出すので、ハンドルの
+// 掴んだ位置がずれても幅が飛ばない。
+let resizeStartX = 0;
+let resizeStartWidth = 0;
+
+function onResizeStart(e: PointerEvent) {
+  resizing.value = true;
+  resizeStartX = e.clientX;
+  resizeStartWidth = width.value;
+  // ポインタを捕捉し、サイドバー外へ出てもイベントを受け取り続ける。
+  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  // ドラッグ中にリンク文字列が選択されるのを防ぐ。
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+}
+
+function onResizeMove(e: PointerEvent) {
+  if (!resizing.value) return;
+  setWidth(resizeStartWidth + (e.clientX - resizeStartX));
+}
+
+function onResizeEnd(e: PointerEvent) {
+  if (!resizing.value) return;
+  resizing.value = false;
+  (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+  document.body.style.userSelect = "";
+}
 
 /**
  * invoke() の reject メッセージから NotFound 系（存在しない folder_id、
@@ -218,6 +277,11 @@ onUnmounted(() => {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  // ドラッグ中にアンマウントされた場合、body の選択禁止が残らないようにする。
+  if (resizing.value) {
+    resizing.value = false;
+    document.body.style.userSelect = "";
   }
 });
 </script>
