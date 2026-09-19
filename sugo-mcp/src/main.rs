@@ -386,14 +386,24 @@ impl SugoServer {
         // Build the inject text: prompt + routing footer (run_id + edges).
         // Prompt and edges are intentionally NOT returned in the MCP response so that
         // Claude must wait for the Nipper-injected turn before acting on them.
+        let terminal = out.edges.is_empty();
+        let step_token = new_step_token();
         let inject_text =
-            build_inject_text(&out.prompt, &out.run_id, &out.edges, out.edges.is_empty());
+            build_inject_text(&out.prompt, &out.run_id, &out.edges, terminal, &step_token);
         // Mark inject pending before calling inject to avoid a race where Nipper's
         // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
         let _ = self
             .run_repo
             .set_inject_pending(&out.run_id, Some(&self.clock.now_iso()))
             .await;
+        // Store the token before injecting, for the same reason: the advance it
+        // authorizes can arrive as soon as Nipper delivers the message.
+        if !terminal {
+            let _ = self
+                .run_repo
+                .set_step_token(&out.run_id, Some(&step_token))
+                .await;
+        }
         let inj = nipper_client::inject(
             &self.nipper_base,
             &self.token_path,
@@ -403,6 +413,7 @@ impl SugoServer {
         .await;
         if let Some(e) = error::nipper_outcome_error(inj) {
             let _ = self.run_repo.set_inject_pending(&out.run_id, None).await;
+            let _ = self.run_repo.set_step_token(&out.run_id, None).await;
             return Err(e);
         }
 
@@ -414,18 +425,55 @@ impl SugoServer {
 
     /// Advance a run along the given edge label and inject the next cell's prompt into Nipper.
     #[tool(
-        description = "Advance a run along edge_label from the current cell. Injects the \
-        next cell's prompt (with available edges and run_id) into the Nipper message queue as \
-        the next user turn. Returns { ok, terminal } only — the next prompt and edges arrive \
-        exclusively via Nipper; do NOT act on them in this turn. terminal=true means the run \
-        is complete. Blocked with inject_pending if Nipper has not yet delivered the previous \
-        inject."
+        description = "Advance a run along edge_label from the current cell. Requires \
+        step_token: the one-time value printed in the footer of the Sugo inject you are \
+        responding to — copy it verbatim. It is never returned by any MCP tool, so it can \
+        only be supplied by a caller that actually received the inject; a missing, stale, or \
+        mismatched token is rejected (step_token_stale / step_token_mismatch) and means you \
+        are out of sync, not that the argument needs adjusting. Injects the next cell's \
+        prompt (with available edges, run_id and a fresh step_token) into the Nipper message \
+        queue as the next user turn. Returns { ok, terminal } only — the next prompt and \
+        edges arrive exclusively via Nipper; do NOT act on them in this turn, and end the \
+        turn immediately after calling this. terminal=true means the run is complete."
     )]
     async fn sugo_advance(
         &self,
         Parameters(args): Parameters<tools::AdvanceArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         use sugo_core::usecase::advance_run::{AdvanceRunInput, advance_run};
+
+        // Step-token gate: the token exists only in the footer of an inject that was
+        // actually delivered, so echoing it back is the proof that this turn really
+        // came from Nipper. Without it, a caller that infers the next step from the
+        // board's loop structure can advance a run it never received a prompt for.
+        // Checked before the inject gate because it is the stronger of the two.
+        let supplied_token = args.step_token.trim();
+        if let Ok(Some(run)) = self.run_repo.get(&args.run_id).await {
+            match run.current_step_token.as_deref() {
+                None => {
+                    return Err(ErrorData::invalid_params(
+                        "step_token rejected: no step token is outstanding for this run. \
+                         Either the current step was already advanced, or no Sugo inject is \
+                         in flight. This is a desync, NOT a bad argument — do not retry in \
+                         this turn and do not re-derive the next step from the board. End \
+                         this turn now and wait for the next Sugo inject message; if none \
+                         arrives, report the situation to the user.",
+                        Some(serde_json::json!({ "code": "step_token_stale" })),
+                    ));
+                }
+                Some(expected) if expected != supplied_token => {
+                    return Err(ErrorData::invalid_params(
+                        "step_token rejected: the value does not match the token in the most \
+                         recent Sugo inject. This is a desync, NOT a typo to guess around — \
+                         use the step_token printed verbatim in the inject you actually \
+                         received. If you are not holding such an inject, end this turn now \
+                         and wait for the next one.",
+                        Some(serde_json::json!({ "code": "step_token_mismatch" })),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
 
         // Inject gate: block if previous inject has not yet been acknowledged by Nipper.
         // After 30 s without an ack the inject is considered lost; mark the run Stalled
@@ -471,20 +519,36 @@ impl SugoServer {
         .await
         .map_err(error::to_tool_error)?;
 
+        // Consume the token only once the advance actually succeeded: a rejected
+        // edge_label must stay retryable within the same received inject, but a
+        // successful step must never be replayable.
+        let _ = self.run_repo.set_step_token(&run_id_for_lookup, None).await;
+
         // Inject the next cell's prompt into the attached Nipper session.
         // Prompt and edges are intentionally NOT returned in the MCP response so that
         // Claude must wait for the Nipper-injected turn before acting on them.
         if let Ok(Some(run)) = self.run_repo.get(&run_id_for_lookup).await
             && let Some(pp) = run.project_path.as_deref()
         {
-            let inject_text =
-                build_inject_text(&out.prompt, &run_id_for_lookup, &out.edges, out.terminal);
+            let next_token = new_step_token();
+            let inject_text = build_inject_text(
+                &out.prompt,
+                &run_id_for_lookup,
+                &out.edges,
+                out.terminal,
+                &next_token,
+            );
             // Mark inject pending before calling inject to avoid a race where Nipper's
             // inject-ack arrives before set_inject_pending, leaving pending stuck forever.
+            // The next step's token is stored here for the same reason.
             if !out.terminal {
                 let _ = self
                     .run_repo
                     .set_inject_pending(&run_id_for_lookup, Some(&self.clock.now_iso()))
+                    .await;
+                let _ = self
+                    .run_repo
+                    .set_step_token(&run_id_for_lookup, Some(&next_token))
                     .await;
             }
             let inj =
@@ -494,6 +558,7 @@ impl SugoServer {
                     .run_repo
                     .set_inject_pending(&run_id_for_lookup, None)
                     .await;
+                let _ = self.run_repo.set_step_token(&run_id_for_lookup, None).await;
                 return Err(e);
             }
             if out.terminal {
@@ -864,11 +929,21 @@ fn parse_cell_status(s: &str) -> Result<sugo_core::domain::cell::CellStatus, Err
 /// Claude knows which run_id and edge labels to use — these are the ONLY
 /// way Claude receives this information; they are never returned in MCP
 /// responses, forcing Claude to wait for the Nipper-injected turn.
+/// Generate a fresh one-time step token.
+///
+/// Must be unguessable: a caller that can predict it could fabricate an inject
+/// it never received. Derived from a v4 UUID, truncated to 12 hex chars (48 bits)
+/// to keep the footer readable while staying far out of guessing range.
+fn new_step_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..12].to_string()
+}
+
 fn build_inject_text(
     prompt: &str,
     run_id: &str,
     edges: &[sugo_core::usecase::start_run::EdgeInfo],
     terminal: bool,
+    step_token: &str,
 ) -> String {
     if terminal {
         format!(
@@ -884,9 +959,10 @@ fn build_inject_text(
             })
             .collect();
         format!(
-            "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を1回だけ呼んでください。\n呼んだ後は、次の Sugo メッセージ（inject）が実際に届くまで待機すること。ループ構造から「次も同じステップだ」と推測して、injectを待たずに次の作業へ進んではいけません。1 inject ＝ 1 ステップを厳守してください。\nrun_id: {}\n選択できるエッジ:\n{}",
+            "{}\n\n---\n【Sugo ハーネス】このターンのタスクが完了したら sugo_advance を1回だけ呼んでください。\n呼んだ後は、そのターンにテキストを一切続けず即座にターンを終えること。次の Sugo メッセージ（inject）が実際に届くまで待機し、ループ構造から「次も同じステップだ」と推測して先に進んではいけません。1 inject ＝ 1 ステップを厳守してください。\nrun_id: {}\nstep_token: {}\n  ↑ この inject でのみ有効な使い捨ての値です。sugo_advance の step_token 引数にそのまま渡してください。\n選択できるエッジ:\n{}",
             prompt,
             run_id,
+            step_token,
             edge_lines.join("\n")
         )
     }
@@ -1395,9 +1471,11 @@ mod tests {
     }
 
     /// Seed a run directly via the core start_run usecase (bypassing the HTTP
-    /// attach/inject the MCP handler performs), returning the run_id. Used by
-    /// advance tests so they don't depend on a live Nipper.
+    /// attach/inject the MCP handler performs), returning the run_id. The step
+    /// token the real inject path would have issued is stored too, so advance
+    /// tests can pass the gate without a live Nipper.
     async fn seed_run(srv: &SugoServer, harness_id: &str) -> String {
+        use sugo_core::ports::run_repository::RunRepository;
         use sugo_core::usecase::start_run::{StartRunInput, start_run};
         let out = start_run(
             srv.repo.as_ref(),
@@ -1410,8 +1488,16 @@ mod tests {
         )
         .await
         .expect("seed start_run");
+        srv.run_repo
+            .set_step_token(&out.run_id, Some(SEED_TOKEN))
+            .await
+            .expect("seed step token");
         out.run_id
     }
+
+    /// The step token `seed_run` installs, standing in for the one a real inject
+    /// footer would have carried.
+    const SEED_TOKEN: &str = "seedtoken123";
 
     #[tokio::test]
     async fn sugo_advance_moves_to_next_cell_and_marks_done() {
@@ -1455,6 +1541,7 @@ mod tests {
             .sugo_advance(Parameters(tools::AdvanceArgs {
                 run_id: run_id.clone(),
                 edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
             }))
             .await
             .expect_err("inject to absent Nipper must fail");
@@ -1509,6 +1596,7 @@ mod tests {
             .sugo_advance(Parameters(tools::AdvanceArgs {
                 run_id,
                 edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
             }))
             .await
             .expect_err("inject_pending must block advance");
@@ -1561,6 +1649,7 @@ mod tests {
             .sugo_advance(Parameters(tools::AdvanceArgs {
                 run_id: run_id.clone(),
                 edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
             }))
             .await
             .expect_err("inject_timeout must reject");
@@ -1610,19 +1699,179 @@ mod tests {
             .sugo_advance(Parameters(tools::AdvanceArgs {
                 run_id: run_id.clone(),
                 edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
             }))
             .await
             .expect_err("inject to absent Nipper must fail");
         assert_eq!(error_code(&err), "nipper_unreachable");
-        // advance again on Done run → run_not_running (core rejects before inject)
+        // Replaying the same token on the Done run is caught by the step-token
+        // gate first: the successful advance consumed it.
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
+            }))
+            .await
+            .expect_err("consumed token must reject");
+        assert_eq!(error_code(&err), "step_token_stale");
+        // With a fresh token outstanding, the Done run is rejected by the core
+        // instead: run_not_running still surfaces past the gate.
+        use sugo_core::ports::run_repository::RunRepository;
+        srv.run_repo
+            .set_step_token(&run_id, Some("another-token"))
+            .await
+            .unwrap();
         let err = srv
             .sugo_advance(Parameters(tools::AdvanceArgs {
                 run_id,
                 edge_label: "next".into(),
+                step_token: "another-token".into(),
             }))
             .await
             .expect_err("Done run must reject");
         assert_eq!(error_code(&err), "run_not_running");
+    }
+
+    /// Board shared by the step-token gate tests: one hop from c1 to a terminal c2.
+    fn token_gate_board() -> BoardDefinition {
+        use sugo_core::domain::edge::Edge;
+        BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "first".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "last".into(),
+                    prompt: "done".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                    request_memo: "".into(),
+                },
+            ],
+            edges: vec![Edge {
+                from: "c1".into(),
+                to: "c2".into(),
+                label: "next".into(),
+                guard: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn sugo_advance_rejects_wrong_step_token() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+                step_token: "guessed".into(),
+            }))
+            .await
+            .expect_err("wrong token must reject");
+        assert_eq!(error_code(&err), "step_token_mismatch");
+        // The run must not have moved.
+        use sugo_core::ports::run_repository::RunRepository;
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.current_cell_id, "c1");
+    }
+
+    #[tokio::test]
+    async fn sugo_advance_rejects_when_no_token_outstanding() {
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        // No inject in flight: this is the fabricated-turn case.
+        srv.run_repo.set_step_token(&run_id, None).await.unwrap();
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
+            }))
+            .await
+            .expect_err("absent token must reject");
+        assert_eq!(error_code(&err), "step_token_stale");
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.current_cell_id, "c1");
+    }
+
+    #[tokio::test]
+    async fn failed_advance_keeps_step_token_usable() {
+        // A rejected edge_label must stay retryable within the same received
+        // inject — otherwise a typo would strand the run permanently.
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "no-such-edge".into(),
+                step_token: SEED_TOKEN.into(),
+            }))
+            .await
+            .expect_err("unknown edge must reject");
+        assert_eq!(error_code(&err), "not_found");
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.current_step_token.as_deref(), Some(SEED_TOKEN));
+        // Retry with the correct label: the gate passes and the core transition
+        // is applied (the inject itself then fails — no Nipper in tests).
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id: run_id.clone(),
+                edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
+            }))
+            .await
+            .expect_err("inject to absent Nipper must fail");
+        assert_eq!(error_code(&err), "nipper_unreachable");
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.current_cell_id, "c2");
+    }
+
+    #[test]
+    fn inject_footer_carries_step_token() {
+        use sugo_core::usecase::start_run::EdgeInfo;
+        let text = build_inject_text(
+            "do the thing",
+            "run-1",
+            &[EdgeInfo {
+                label: "next".into(),
+                to_cell_id: "c2".into(),
+                to_cell_name: "last".into(),
+                guard: None,
+            }],
+            false,
+            "abc123def456",
+        );
+        assert!(text.contains("step_token: abc123def456"));
+    }
+
+    #[test]
+    fn terminal_inject_omits_step_token() {
+        // Nothing can follow a terminal cell, so no token is issued or printed.
+        let text = build_inject_text("all done", "run-1", &[], true, "abc123def456");
+        assert!(!text.contains("abc123def456"));
+    }
+
+    #[test]
+    fn step_tokens_are_unique_per_call() {
+        let a = new_step_token();
+        let b = new_step_token();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 12);
     }
 
     /// A board with one active non-terminal cell and one draft terminal cell.

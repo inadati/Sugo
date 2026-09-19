@@ -19,6 +19,9 @@ pub trait RunRepository: Send + Sync {
     /// Set or clear the inject_pending_since timestamp. Pass Some(ts) when an inject is sent,
     /// None to clear (inject acknowledged by Nipper). No-op if run does not exist.
     async fn set_inject_pending(&self, run_id: &str, ts: Option<&str>) -> Result<(), CoreError>;
+    /// Set or clear the one-time step token. Pass Some(token) just before an inject is sent,
+    /// None once the advance it authorizes has succeeded. No-op if run does not exist.
+    async fn set_step_token(&self, run_id: &str, token: Option<&str>) -> Result<(), CoreError>;
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -90,6 +93,14 @@ pub mod fake {
             let mut map = self.runs.lock().unwrap();
             if let Some(run) = map.get_mut(run_id) {
                 run.inject_pending_since = ts.map(|s| s.to_string());
+            }
+            Ok(())
+        }
+
+        async fn set_step_token(&self, run_id: &str, token: Option<&str>) -> Result<(), CoreError> {
+            let mut map = self.runs.lock().unwrap();
+            if let Some(run) = map.get_mut(run_id) {
+                run.current_step_token = token.map(|s| s.to_string());
             }
             Ok(())
         }

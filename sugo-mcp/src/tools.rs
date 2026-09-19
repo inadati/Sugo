@@ -122,6 +122,10 @@ pub struct AdvanceArgs {
     pub run_id: String,
     /// Edge label to follow from the current cell.
     pub edge_label: String,
+    /// The one-time `step_token` printed in the footer of the Sugo inject you are
+    /// responding to. Copy it verbatim. It is never returned by any MCP tool, so a
+    /// caller that did not actually receive the inject cannot supply it.
+    pub step_token: String,
 }
 
 /// Per-cell change in a `sugo_update_harness` call.
@@ -342,9 +346,20 @@ mod tests {
     #[test]
     fn advance_args_round_trip() {
         let args: AdvanceArgs =
-            serde_json::from_str(r#"{"run_id":"r1","edge_label":"next"}"#).unwrap();
+            serde_json::from_str(r#"{"run_id":"r1","edge_label":"next","step_token":"tok1"}"#)
+                .unwrap();
         assert_eq!(args.run_id, "r1");
         assert_eq!(args.edge_label, "next");
+        assert_eq!(args.step_token, "tok1");
+    }
+
+    /// `step_token` is deliberately required: an omitted token must be a hard
+    /// parse error rather than defaulting to something the gate would accept.
+    #[test]
+    fn advance_args_missing_step_token_errors() {
+        let err = serde_json::from_str::<AdvanceArgs>(r#"{"run_id":"r1","edge_label":"next"}"#)
+            .expect_err("step_token must be required");
+        assert!(err.to_string().contains("step_token"));
     }
 
     #[test]

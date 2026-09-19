@@ -186,6 +186,7 @@ mod tests {
                     updated_at: "t".into(),
                     last_heartbeat_at: None,
                     inject_pending_since: None,
+                    current_step_token: None,
                 }
             })
             .await
@@ -218,6 +219,7 @@ mod tests {
                     updated_at: "t".into(),
                     last_heartbeat_at: None,
                     inject_pending_since: None,
+                    current_step_token: None,
                 }
             })
             .await

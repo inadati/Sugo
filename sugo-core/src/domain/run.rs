@@ -48,4 +48,10 @@ pub struct Run {
     /// Set to the timestamp when the last inject was sent; cleared by /inject-ack from Nipper.
     /// sugo_advance is blocked while this is Some (inject gate).
     pub inject_pending_since: Option<String>,
+    /// One-time, unguessable token printed only in the current inject's footer.
+    /// `sugo_advance` must echo it back, which proves the caller actually received
+    /// the injected turn rather than inferring the next step from the board shape.
+    /// Issued just before each non-terminal inject and consumed by the advance it
+    /// authorizes; `None` means no inject is outstanding.
+    pub current_step_token: Option<String>,
 }

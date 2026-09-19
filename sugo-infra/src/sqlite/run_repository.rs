@@ -46,12 +46,12 @@ impl RunRepository for SqliteRunRepository {
     async fn create(&self, run: &Run) -> Result<(), CoreError> {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         conn.execute(
-            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO runs (id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since, current_step_token)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 run.id, run.harness_id, run.board_version_no, run.current_cell_id,
                 status_str(&run.status), run.project_path, run.created_at, run.updated_at,
-                run.last_heartbeat_at, run.inject_pending_since
+                run.last_heartbeat_at, run.inject_pending_since, run.current_step_token
             ],
         )
         .map_err(map_err)?;
@@ -62,7 +62,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let row = conn
             .query_row(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since, current_step_token \
                  FROM runs WHERE id = ?1",
                 [run_id],
                 |row| {
@@ -80,6 +80,7 @@ impl RunRepository for SqliteRunRepository {
                         updated_at: row.get(7)?,
                         last_heartbeat_at: row.get(8)?,
                         inject_pending_since: row.get(9)?,
+                        current_step_token: row.get(10)?,
                     })
                 },
             )
@@ -111,7 +112,7 @@ impl RunRepository for SqliteRunRepository {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since \
+                "SELECT id, harness_id, board_version_no, current_cell_id, status, project_path, created_at, updated_at, last_heartbeat_at, inject_pending_since, current_step_token \
                  FROM runs WHERE harness_id = ?1 ORDER BY created_at DESC",
             )
             .map_err(map_err)?;
@@ -131,6 +132,7 @@ impl RunRepository for SqliteRunRepository {
                     updated_at: row.get(7)?,
                     last_heartbeat_at: row.get(8)?,
                     inject_pending_since: row.get(9)?,
+                    current_step_token: row.get(10)?,
                 })
             })
             .map_err(map_err)?;
@@ -152,6 +154,16 @@ impl RunRepository for SqliteRunRepository {
         conn.execute(
             "UPDATE runs SET inject_pending_since = ?1 WHERE id = ?2",
             rusqlite::params![ts, run_id],
+        )
+        .map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn set_step_token(&self, run_id: &str, token: Option<&str>) -> Result<(), CoreError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "UPDATE runs SET current_step_token = ?1 WHERE id = ?2",
+            rusqlite::params![token, run_id],
         )
         .map_err(map_err)?;
         Ok(())
@@ -183,6 +195,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00+09:00".into(),
             last_heartbeat_at: None,
             inject_pending_since: None,
+            current_step_token: None,
         }
     }
 
@@ -242,6 +255,18 @@ mod tests {
             got.last_heartbeat_at.as_deref(),
             Some("2026-06-28T12:00:00+09:00")
         );
+    }
+
+    #[tokio::test]
+    async fn set_step_token_round_trips_and_clears() {
+        let r = repo();
+        r.create(&sample_run("r1")).await.unwrap();
+        r.set_step_token("r1", Some("tok-abc")).await.unwrap();
+        let got = r.get("r1").await.unwrap().unwrap();
+        assert_eq!(got.current_step_token.as_deref(), Some("tok-abc"));
+        r.set_step_token("r1", None).await.unwrap();
+        let got = r.get("r1").await.unwrap().unwrap();
+        assert_eq!(got.current_step_token, None);
     }
 
     #[tokio::test]

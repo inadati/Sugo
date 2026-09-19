@@ -98,6 +98,7 @@ mod tests {
             last_heartbeat_at: None,
             updated_at: updated_at.into(),
             inject_pending_since: None,
+            current_step_token: None,
         }
     }
 

@@ -75,6 +75,7 @@ pub async fn start_run(
         last_heartbeat_at: None,
         updated_at: now,
         inject_pending_since: None,
+        current_step_token: None,
     };
     let run_id = run.id.clone();
     run_repo.create(&run).await?;

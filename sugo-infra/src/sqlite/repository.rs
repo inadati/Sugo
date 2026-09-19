@@ -105,6 +105,20 @@ impl SqliteHarnessRepository {
             conn.execute("ALTER TABLE runs ADD COLUMN inject_pending_since TEXT", [])
                 .map_err(map_err)?;
         }
+        // Idempotent migration for current_step_token (one-time inject proof, added 2026-09).
+        let has_step_token_col: bool = conn
+            .prepare("PRAGMA table_info(runs)")
+            .and_then(|mut s| {
+                let cols = s
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(cols.iter().any(|c| c == "current_step_token"))
+            })
+            .map_err(map_err)?;
+        if !has_step_token_col {
+            conn.execute("ALTER TABLE runs ADD COLUMN current_step_token TEXT", [])
+                .map_err(map_err)?;
+        }
         // Idempotent migration for deleted_at (soft-delete trash, added 2026-06).
         let has_deleted_at: bool = conn
             .prepare("PRAGMA table_info(harnesses)")
@@ -722,6 +736,37 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(cols.iter().any(|c| c == "folder_id"));
+    }
+
+    #[test]
+    fn step_token_migration_is_idempotent_on_legacy_db() {
+        // current_step_token を持たない旧 runs テーブルを手で組み立て、
+        // open が2回とも成功し列が追加されることを確認する。
+        let dir = temp_dir("step-token-migration");
+        let path = dir.join("legacy_runs.db");
+        let path_str = path.to_str().unwrap();
+        {
+            let conn = rusqlite::Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runs (
+                   id TEXT PRIMARY KEY, harness_id TEXT NOT NULL,
+                   board_version_no INTEGER NOT NULL, current_cell_id TEXT NOT NULL,
+                   status TEXT NOT NULL DEFAULT 'running', project_path TEXT,
+                   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        SqliteHarnessRepository::open(path_str).expect("1回目の open");
+        SqliteHarnessRepository::open(path_str).expect("2回目の open（冪等）");
+
+        let conn = rusqlite::Connection::open(path_str).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(runs)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "current_step_token"));
     }
 
     #[test]

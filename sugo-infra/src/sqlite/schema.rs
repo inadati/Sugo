@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS runs (
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   last_heartbeat_at TEXT,
-  inject_pending_since TEXT
+  inject_pending_since TEXT,
+  current_step_token TEXT
 );
 "#;
