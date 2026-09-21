@@ -17,5 +17,6 @@ pub mod get_status;
 pub mod lease;
 pub mod rename_harness;
 pub mod start_run;
+pub mod stop_run;
 pub mod update_harness;
 pub mod validate_harness;

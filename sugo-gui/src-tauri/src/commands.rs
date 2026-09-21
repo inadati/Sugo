@@ -1,8 +1,8 @@
 use crate::dto::{
     ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto,
     DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto, DraftCellDto, EdgeDto,
-    FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, TrashItemDto,
-    UpdateEdgeResultDto,
+    FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, StopRunResultDto,
+    TrashItemDto, UpdateEdgeResultDto,
 };
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
@@ -924,6 +924,40 @@ pub async fn get_active_runs(
     Ok(active)
 }
 
+pub(crate) async fn stop_run_inner(
+    run_repo: &dyn RunRepository,
+    clock: &dyn IdClock,
+    run_id: String,
+) -> Result<StopRunResultDto, String> {
+    let out = sugo_core::usecase::stop_run::stop_run(
+        run_repo,
+        clock,
+        sugo_core::usecase::stop_run::StopRunInput { run_id },
+    )
+    .await
+    .map_err(map_core_error)?;
+
+    Ok(StopRunResultDto {
+        was_in_flight: out.was_in_flight,
+        stopped_at_cell_id: out.stopped_at_cell_id,
+    })
+}
+
+/// 実行中のランを停止する。ハーネス定義は触らないため、停止後はそのまま
+/// `sugo_start` で引き直せる。
+///
+/// GUI は Nipper と直接通信しない（このクレートは HTTP クライアントを持たない）ため、
+/// Nipper 側の attachment を detach するのは MCP の `sugo_stop_run` だけである。
+/// DB が「ランが生きているか」の権威なので、これで催促（advance reminder）は止まる。
+/// 残った attachment は次の `sugo_start` の attach で上書きされる。
+#[tauri::command]
+pub async fn stop_run(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<StopRunResultDto, String> {
+    stop_run_inner(state.run_repo.as_ref(), &GuiIdClock, run_id).await
+}
+
 pub(crate) async fn trash_harness_inner(
     repo: &dyn HarnessRepository,
     harness_id: String,
@@ -1022,14 +1056,17 @@ mod tests {
         delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner,
         list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner,
         rename_folder_inner, rename_harness_inner, restore_harness_inner, set_cell_memo_inner,
-        trash_harness_inner, update_edge_inner,
+        stop_run_inner, trash_harness_inner, update_edge_inner,
     };
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
+    use sugo_core::domain::run::RunStatus;
     use sugo_core::error::CoreError;
     use sugo_core::ports::repository::HarnessRepository;
     use sugo_core::ports::repository::fake::{FakeIdClock, InMemoryHarnessRepository};
+    use sugo_core::ports::run_repository::RunRepository;
+    use sugo_core::ports::run_repository::fake::InMemoryRunRepository;
     use sugo_core::usecase::create_harness::{CreateHarnessInput, create_harness};
     use sugo_core::usecase::get_status::get_status;
 
@@ -1455,6 +1492,88 @@ mod tests {
             actual: 2,
         };
         assert_eq!(super::map_core_error(e), "lock_conflict");
+    }
+
+    // ── stop_run ────────────────────────────────────────────────────────────
+
+    /// 実行中のランを1件だけ持つ in-memory run リポジトリを用意する。
+    async fn seed_run(status: RunStatus) -> InMemoryRunRepository {
+        use sugo_core::domain::run::Run;
+        let run_repo = InMemoryRunRepository::new();
+        run_repo
+            .create(&Run {
+                id: "r1".into(),
+                harness_id: "h1".into(),
+                board_version_no: 1,
+                current_cell_id: "c10".into(),
+                status,
+                project_path: Some("/p".into()),
+                created_at: "2026-09-21T00:00:00+09:00".into(),
+                last_heartbeat_at: None,
+                updated_at: "2026-09-21T00:00:00+09:00".into(),
+                inject_pending_since: None,
+                current_step_token: Some("tok".into()),
+            })
+            .await
+            .unwrap();
+        run_repo
+    }
+
+    #[tokio::test]
+    async fn stop_run_inner_closes_the_run() {
+        let run_repo = seed_run(RunStatus::Running).await;
+        let res = stop_run_inner(&run_repo, &FakeIdClock::new(), "r1".into())
+            .await
+            .unwrap();
+
+        assert!(res.was_in_flight);
+        assert_eq!(res.stopped_at_cell_id, "c10");
+        assert_eq!(
+            run_repo.get("r1").await.unwrap().unwrap().status,
+            RunStatus::Closed
+        );
+    }
+
+    /// 停止したランは `get_active_runs` の絞り込み（status = Running）から外れる。
+    /// 盤面のピンが消え、催促も止まるのはこの一点に依存している。
+    #[tokio::test]
+    async fn stopped_run_is_no_longer_running() {
+        let run_repo = seed_run(RunStatus::Running).await;
+        stop_run_inner(&run_repo, &FakeIdClock::new(), "r1".into())
+            .await
+            .unwrap();
+
+        let still_running = run_repo
+            .list_by_harness("h1")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.status == RunStatus::Running)
+            .count();
+        assert_eq!(still_running, 0);
+    }
+
+    #[tokio::test]
+    async fn stop_run_inner_on_finished_run_reports_not_in_flight() {
+        let run_repo = seed_run(RunStatus::Done).await;
+        let res = stop_run_inner(&run_repo, &FakeIdClock::new(), "r1".into())
+            .await
+            .unwrap();
+
+        assert!(!res.was_in_flight);
+        assert_eq!(
+            run_repo.get("r1").await.unwrap().unwrap().status,
+            RunStatus::Done
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_run_inner_missing_run_is_an_error() {
+        let run_repo = InMemoryRunRepository::new();
+        let err = stop_run_inner(&run_repo, &FakeIdClock::new(), "nope".into())
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
     }
 
     #[tokio::test]

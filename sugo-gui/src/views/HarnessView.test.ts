@@ -93,6 +93,111 @@ describe("HarnessView", () => {
     vi.mocked(invoke).mockResolvedValue(mockDetail);
   });
 
+  // ── 実行中ランの停止 ──────────────────────────────────────────────────
+  //
+  // 袋小路に入ったラン（出ている辺がどれも誤った前進になるセルで止まった状態）を
+  // GUI から終わらせるための導線。invoke は get_harness / get_active_runs の2本を
+  // 並列に呼ぶので、モックは呼び出し名で振り分ける。
+  const activeRun = { run_id: "r1", current_cell_id: "c1", project_path: "/work/proj" };
+
+  function mockWithRuns(invoke: ReturnType<typeof vi.fn>, runs: unknown[]) {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_active_runs") return Promise.resolve(runs);
+      return Promise.resolve(mockDetail);
+    });
+  }
+
+  it("実行中ランがあるとタブ名と現在のマス名を出した停止ボタンを表示する", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    mockWithRuns(invoke as never, [activeRun]);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const banner = wrapper.get('[data-testid="running-run"]');
+    expect(banner.text()).toContain("proj");
+    expect(banner.text()).toContain("start");
+    expect(wrapper.find('[data-testid="stop-run-btn"]').exists()).toBe(true);
+
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
+  it("実行中ランが無いときは停止ボタンを出さない", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    mockWithRuns(invoke as never, []);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.find('[data-testid="stop-run-btn"]').exists()).toBe(false);
+
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
+  it("停止ボタンは即座に止めず確認ダイアログを出す", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    mockWithRuns(invoke as never, [activeRun]);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.find('[data-testid="stop-run-btn"]').trigger("click");
+    expect(wrapper.find('[data-testid="stop-run-dialog"]').exists()).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("stop_run", expect.anything());
+
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
+  it("確認ダイアログで停止するとstop_runを呼び、キャンセルでは呼ばない", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    mockWithRuns(invoke as never, [activeRun]);
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.find('[data-testid="stop-run-btn"]').trigger("click");
+    await wrapper.find('[data-testid="stop-run-cancel-btn"]').trigger("click");
+    expect(wrapper.find('[data-testid="stop-run-dialog"]').exists()).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith("stop_run", expect.anything());
+
+    await wrapper.find('[data-testid="stop-run-btn"]').trigger("click");
+    await wrapper.find('[data-testid="stop-run-confirm-btn"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(invoke).toHaveBeenCalledWith("stop_run", { runId: "r1" });
+    // 停止後は一覧が空になるので、ボタンとダイアログの両方が消える
+    mockWithRuns(invoke as never, []);
+    expect(wrapper.find('[data-testid="stop-run-dialog"]').exists()).toBe(false);
+
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
+  it("停止に失敗したらトーストで知らせ、ダイアログを閉じる", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_active_runs") return Promise.resolve([activeRun]);
+      if (cmd === "stop_run") return Promise.reject(new Error("not found: run not found: r1"));
+      return Promise.resolve(mockDetail);
+    });
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.find('[data-testid="stop-run-btn"]').trigger("click");
+    await wrapper.find('[data-testid="stop-run-confirm-btn"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(wrapper.get('[data-testid="toast"]').text()).toContain("停止");
+    expect(wrapper.find('[data-testid="stop-run-dialog"]').exists()).toBe(false);
+
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
   it("reloads detail when polled current_version changes", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.useFakeTimers();

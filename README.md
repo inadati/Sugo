@@ -41,6 +41,7 @@ Sugoが公開する主なMCPツールは以下の通り。
 | `sugo_start` | ハーネス実行の開始 |
 | `sugo_status` | 現在の進行状況・差分の取得 |
 | `sugo_advance` | 次のマスへの進行 |
+| `sugo_stop_run` | 実行中ランの停止（袋小路に入ったランを終わらせる） |
 | `sugo_delete_harness` | ハーネスの削除 |
 
 ## 開発

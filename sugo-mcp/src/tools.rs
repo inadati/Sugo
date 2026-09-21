@@ -128,6 +128,13 @@ pub struct AdvanceArgs {
     pub step_token: String,
 }
 
+/// Arguments for `sugo_stop_run`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StopRunArgs {
+    /// Id of the run to stop. Obtainable from `sugo_status`'s `running_runs`.
+    pub run_id: String,
+}
+
 /// Per-cell change in a `sugo_update_harness` call.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CellChangeArgs {
@@ -351,6 +358,12 @@ mod tests {
         assert_eq!(args.run_id, "r1");
         assert_eq!(args.edge_label, "next");
         assert_eq!(args.step_token, "tok1");
+    }
+
+    #[test]
+    fn stop_run_args_round_trip() {
+        let args: StopRunArgs = serde_json::from_str(r#"{"run_id":"r1"}"#).unwrap();
+        assert_eq!(args.run_id, "r1");
     }
 
     /// `step_token` is deliberately required: an omitted token must be a hard

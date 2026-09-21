@@ -25,7 +25,7 @@ tools: []
 
 `sugo_status(harness_id)` で `running_runs` を確認する。Running状態のrunが存在し、かつ最終更新から300秒以内であれば
 `sugo_delete_harness` は `active_run` エラーで拒否される。実行中runが見つかった場合は、ユーザーにその旨を伝え、
-runの完了・停止を待つか、削除を見送るかを確認する。
+runの完了を待つか、`sugo_stop_run(run_id)` で止めるか（規律は `sugo-run-stop` スキル）、削除を見送るかを確認する。
 
 **注意**: `sugo_status` の `running_runs[].is_stalled` は jsonl ファイルの mtime を根拠にした別系統の鮮度判定（stall検知）であり、
 `sugo_delete_harness` の `active_run` 判定（DBの `last_heartbeat_at`/`updated_at` を根拠にした300秒判定）とは異なるメカニズムである。

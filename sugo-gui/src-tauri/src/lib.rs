@@ -6,7 +6,7 @@ use commands::{
     add_cell, add_edge, create_folder, create_harness, delete_cell, delete_edge, delete_folder,
     get_active_runs, get_harness, list_folders, list_harnesses, list_trash, move_harness_to_folder,
     purge_harness, rename_cell, rename_folder, rename_harness, restore_harness, set_cell_memo,
-    trash_harness, update_edge,
+    stop_run, trash_harness, update_edge,
 };
 use state::AppState;
 use sugo_core::ports::repository::HarnessRepository;
@@ -58,6 +58,7 @@ pub fn run() {
             delete_edge,
             update_edge,
             get_active_runs,
+            stop_run,
             trash_harness,
             restore_harness,
             purge_harness,

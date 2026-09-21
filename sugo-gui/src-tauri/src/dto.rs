@@ -111,6 +111,14 @@ pub struct ActiveRunDto {
     pub project_path: Option<String>,
 }
 
+/// `stop_run` の結果。`was_in_flight` が false のときは、そのランが既に
+/// 終了していて何も変更されなかったことを意味する。
+#[derive(Debug, Serialize)]
+pub struct StopRunResultDto {
+    pub was_in_flight: bool,
+    pub stopped_at_cell_id: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TrashItemDto {
     pub harness_id: String,

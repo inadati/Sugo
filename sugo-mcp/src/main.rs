@@ -581,6 +581,67 @@ impl SugoServer {
         )]))
     }
 
+    /// Stop a run that is in flight, leaving its harness definition untouched.
+    #[tool(
+        description = "Stop a run in flight. The harness definition is untouched, so the same \
+        harness can be started again with sugo_start right away; the run itself ends and its \
+        advance reminders stop. Use this when the run has reached a dead end — you are on a \
+        cell whose outgoing edges all describe the wrong next step (e.g. an earlier cell's \
+        artifact turned out to be wrong and no edge leads back to it), so sugo_advance must \
+        not be called at all. Do NOT use it to skip a cell you merely find difficult, and do \
+        NOT reach for sugo_delete_harness for this: that trashes the whole harness. Returns \
+        { ok, was_in_flight, stopped_at_cell_id, harness_id }; was_in_flight=false means the \
+        run had already finished and nothing was changed. Stopping a run discards its \
+        progress from the agent's perspective — confirm with the user before calling (see the \
+        sugo-run-stop skill)."
+    )]
+    async fn sugo_stop_run(
+        &self,
+        Parameters(args): Parameters<tools::StopRunArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::usecase::stop_run::{StopRunInput, stop_run};
+
+        // Read the run before stopping: the project_path is needed to detach the
+        // Nipper session, and stop_run does not report it.
+        let project_path = self
+            .run_repo
+            .get(&args.run_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.project_path);
+
+        let out = stop_run(
+            self.run_repo.as_ref(),
+            self.clock.as_ref(),
+            StopRunInput {
+                run_id: args.run_id.clone(),
+            },
+        )
+        .await
+        .map_err(error::to_tool_error)?;
+
+        // Detach the Nipper session so it stops heartbeating a run that is over.
+        // A failure here is not fatal: the DB is the authority for whether the run
+        // is live, and Nipper's attachment is overwritten by the next sugo_start.
+        if out.was_in_flight
+            && let Some(pp) = project_path.as_deref()
+        {
+            let _ =
+                nipper_client::detach(&self.nipper_base, &self.token_path, pp, &args.run_id).await;
+        }
+
+        let payload = serde_json::json!({
+            "ok": true,
+            "was_in_flight": out.was_in_flight,
+            "stopped_at_cell_id": out.stopped_at_cell_id,
+            "harness_id": out.harness_id,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
     /// Batch-update cells and edges in one new board version.
     #[tool(description = "Batch-update a harness in a single new board version. \
         cell_changes: [{cell_id, prompt?, status?, memo?}] — prompt, status, and memo are optional \
@@ -974,12 +1035,13 @@ impl ServerHandler for SugoServer {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(
             "Sugo harness MCP server. Tools: sugo_create_harness, sugo_status, \
-             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_update_harness, \
-             sugo_delete_harness, sugo_list_folders, sugo_create_folder, sugo_rename_folder, \
-             sugo_delete_folder, sugo_move_harness. \
+             sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_stop_run, \
+             sugo_update_harness, sugo_delete_harness, sugo_list_folders, sugo_create_folder, \
+             sugo_rename_folder, sugo_delete_folder, sugo_move_harness. \
              Editing a cell always produces a new immutable board version guarded by an optimistic lock. \
              sugo_start begins a run and injects the first cell's prompt into the Nipper message queue; \
              sugo_advance follows an edge and injects the next cell's prompt into Nipper. \
+             sugo_stop_run ends a run that has reached a dead end, leaving the harness startable again. \
              IMPORTANT: sugo_start and sugo_advance return NO prompt or edges in their MCP response. \
              The prompt, available edges, and run_id arrive exclusively as the next Nipper-injected \
              message. Claude must wait for that message before acting — never process harness content \
@@ -1805,6 +1867,132 @@ mod tests {
         assert_eq!(error_code(&err), "step_token_stale");
         let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run.current_cell_id, "c1");
+    }
+
+    #[tokio::test]
+    async fn sugo_stop_run_closes_the_run_and_clears_the_token() {
+        use sugo_core::domain::run::RunStatus;
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+
+        // The detach to the absent Nipper fails, but stopping must still succeed:
+        // the DB is the authority for whether the run is live.
+        let res = srv
+            .sugo_stop_run(Parameters(tools::StopRunArgs {
+                run_id: run_id.clone(),
+            }))
+            .await
+            .expect("stop must succeed without a live Nipper");
+        let payload = payload(&res);
+        assert_eq!(payload["ok"], serde_json::json!(true));
+        assert_eq!(payload["was_in_flight"], serde_json::json!(true));
+        assert_eq!(payload["stopped_at_cell_id"], serde_json::json!("c1"));
+        assert_eq!(payload["harness_id"], serde_json::json!(id));
+
+        let run = srv.run_repo.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Closed);
+        // A leftover token must not authorize an advance on a dead run.
+        assert_eq!(run.current_step_token, None);
+    }
+
+    #[tokio::test]
+    async fn sugo_stop_run_then_advance_is_rejected() {
+        // The reason to stop is that advancing is wrong, so a stopped run must
+        // not be advanceable even by a caller still holding its inject.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        srv.sugo_stop_run(Parameters(tools::StopRunArgs {
+            run_id: run_id.clone(),
+        }))
+        .await
+        .expect("stop must succeed");
+
+        let err = srv
+            .sugo_advance(Parameters(tools::AdvanceArgs {
+                run_id,
+                edge_label: "next".into(),
+                step_token: SEED_TOKEN.into(),
+            }))
+            .await
+            .expect_err("a stopped run must not advance");
+        assert_eq!(error_code(&err), "step_token_stale");
+    }
+
+    #[tokio::test]
+    async fn sugo_stop_run_drops_the_run_from_status() {
+        // The nagging the user wants to end is driven by Running state, so the
+        // stopped run must disappear from running_runs.
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        srv.sugo_stop_run(Parameters(tools::StopRunArgs { run_id }))
+            .await
+            .expect("stop must succeed");
+
+        let res = srv
+            .sugo_status(Parameters(tools::StatusArgs {
+                harness_id: Some(id),
+            }))
+            .await
+            .unwrap();
+        let payload = payload(&res);
+        assert_eq!(payload["running_runs"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sugo_stop_run_is_idempotent() {
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let run_id = seed_run(&srv, &id).await;
+        srv.sugo_stop_run(Parameters(tools::StopRunArgs {
+            run_id: run_id.clone(),
+        }))
+        .await
+        .expect("first stop must succeed");
+
+        let res = srv
+            .sugo_stop_run(Parameters(tools::StopRunArgs { run_id }))
+            .await
+            .expect("second stop must not error");
+        let payload = payload(&res);
+        assert_eq!(payload["ok"], serde_json::json!(true));
+        assert_eq!(payload["was_in_flight"], serde_json::json!(false));
+    }
+
+    #[tokio::test]
+    async fn sugo_stop_run_missing_run_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_stop_run(Parameters(tools::StopRunArgs {
+                run_id: "nope".into(),
+            }))
+            .await
+            .expect_err("unknown run must reject");
+        assert_eq!(error_code(&err), "not_found");
+    }
+
+    #[tokio::test]
+    async fn sugo_start_after_stop_begins_a_fresh_run() {
+        // Stopping must leave the harness startable again — that is what makes
+        // "stop" also serve as "reset".
+        use sugo_core::ports::run_repository::RunRepository;
+        let srv = server();
+        let id = create_harness(&srv, "h", Some(token_gate_board())).await;
+        let stopped = seed_run(&srv, &id).await;
+        srv.sugo_stop_run(Parameters(tools::StopRunArgs {
+            run_id: stopped.clone(),
+        }))
+        .await
+        .expect("stop must succeed");
+
+        let fresh = seed_run(&srv, &id).await;
+        assert_ne!(fresh, stopped);
+        let run = srv.run_repo.get(&fresh).await.unwrap().unwrap();
+        assert_eq!(run.current_cell_id, "c1");
+        assert_eq!(run.status, sugo_core::domain::run::RunStatus::Running);
     }
 
     #[tokio::test]

@@ -12,6 +12,28 @@
       >+ マスを追加</button>
     </div>
 
+    <!-- 実行中ラン: 袋小路に入ったランをここから終わらせる -->
+    <div v-if="activeRuns.length" class="shrink-0 mb-3 space-y-2">
+      <div
+        v-for="run in activeRuns"
+        :key="run.run_id"
+        data-testid="running-run"
+        class="flex items-center justify-between bg-orange-50 border border-orange-200 rounded px-3 py-2"
+      >
+        <p class="text-xs text-orange-800">
+          実行中: <span class="font-semibold">{{ tabName(run.project_path) }}</span>
+          ／ 現在のマス <span class="font-semibold">{{ cellName(run.current_cell_id) }}</span>
+        </p>
+        <button
+          data-testid="stop-run-btn"
+          class="px-3 py-1 text-xs text-orange-700 border border-orange-300 rounded hover:bg-orange-100"
+          @click="stopTarget = run"
+        >
+          停止
+        </button>
+      </div>
+    </div>
+
     <!-- 操作ヒント（モードレス編集） -->
     <div class="shrink-0 mb-3 bg-gray-50 border border-gray-200 rounded px-3 py-2 text-xs text-gray-500">
       ノードの縁の●からドラッグして接続 ／ ダブルクリックで名前・エッジを編集 ／ 選択して Delete で削除
@@ -83,6 +105,38 @@
       @reload="onEditorReload"
       @delete="onEdgeEditorDelete"
     />
+
+    <!-- ラン停止確認ダイアログ -->
+    <div
+      v-if="stopTarget"
+      data-testid="stop-run-dialog"
+      class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center"
+    >
+      <div class="bg-white rounded-lg shadow-lg p-6 w-96">
+        <p class="text-sm font-medium mb-2">
+          このランを停止します。進行中の位置（{{ cellName(stopTarget.current_cell_id) }}）は失われます。
+        </p>
+        <p class="text-xs text-gray-500 mb-4">
+          ハーネスの盤面は変わりません。停止後、あらためて最初から実行できます。
+        </p>
+        <div class="flex gap-2 justify-end">
+          <button
+            data-testid="stop-run-cancel-btn"
+            class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900"
+            @click="stopTarget = null"
+          >
+            キャンセル
+          </button>
+          <button
+            data-testid="stop-run-confirm-btn"
+            class="px-3 py-1.5 text-sm bg-orange-500 text-white rounded hover:bg-orange-600"
+            @click="doStopRun"
+          >
+            停止する
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
   <div v-else class="text-gray-400">読み込み中...</div>
 </template>
@@ -136,6 +190,7 @@ const lockVersion = ref(0);
 const showAddCell = ref(false);
 const selectedCellId = ref<string | null>(null);
 const activeRuns = ref<ActiveRun[]>([]);
+const stopTarget = ref<ActiveRun | null>(null);
 const edgeEditor = ref<EdgeEditorState | null>(null);
 const { toast, showToast } = useToast();
 
@@ -175,6 +230,29 @@ function onSelectCell(cellId: string) {
 
 function cellName(cellId: string): string {
   return detail.value?.cells.find((c) => c.id === cellId)?.name ?? cellId;
+}
+
+/// ラン表示用のタブ名。BoardGraph のピンと同じ「project_path の末尾」規則。
+function tabName(path: string | null): string {
+  if (!path) return "?";
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || "?";
+}
+
+/// 確認済みのランを停止する。盤面定義は触らないので、停止後はそのまま
+/// 最初から引き直せる。停止したランは status が Running から外れるため、
+/// 次の load() で一覧（＝このバナーと盤面のピン）から消える。
+async function doStopRun() {
+  const target = stopTarget.value;
+  if (!target) return;
+  try {
+    await invoke("stop_run", { runId: target.run_id });
+    stopTarget.value = null;
+    await load();
+  } catch {
+    stopTarget.value = null;
+    showToast("ランの停止に失敗しました。");
+  }
 }
 
 function onConnect(p: { from: string; to: string; x: number; y: number }) {
