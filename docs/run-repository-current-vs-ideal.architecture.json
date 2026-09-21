@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Sugo RunRepository — 現状と理想",
+    "title": "Sugo RunRepository — 改修前と改修後",
     "output": "run-repository-current-vs-ideal.html",
     "quality_profile": "showcase",
     "repository": {
@@ -12,7 +12,7 @@
     "views": [
       {
         "id": "now",
-        "label": "現状: 型が嘘をつく",
+        "label": "改修前: 型が嘘をつく",
         "focus": [
           "callers",
           "update_now",
@@ -23,7 +23,7 @@
       },
       {
         "id": "ideal",
-        "label": "理想: 名前が書く先を決める",
+        "label": "改修後: 名前が書く先を決める",
         "focus": [
           "callers",
           "port_ideal",
@@ -209,7 +209,7 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "現状 — 型が振る舞いより多くを約束している",
+      "label": "改修前 — 型が振る舞いより多くを約束していた",
       "wraps": [
         "update_now",
         "sqlite_now",
@@ -218,7 +218,7 @@
     },
     {
       "kind": "region",
-      "label": "理想 — 名前が書く先を決め、契約が両実装を縛る",
+      "label": "改修後 — 名前が書く先を決め、契約が両実装を縛る",
       "wraps": [
         "port_ideal",
         "sqlite_ideal",
@@ -294,7 +294,7 @@
   "cards": [
     {
       "dot": "rose",
-      "title": "現状の欠陥",
+      "title": "改修前の欠陥",
       "items": [
         "update(&Run) はこのコードベースで唯一のエンティティ型の書き込み",
         "型は11フィールド、SQLite は3カラム — 差分は無言で消える",
@@ -312,11 +312,11 @@
     },
     {
       "dot": "emerald",
-      "title": "理想への2手",
+      "title": "入れた2手",
       "items": [
-        "先に RunRepository の契約テストを足し、乖離を検出可能にする",
-        "次に update を set_position / set_status に割る",
-        "stop_run の3回の非アトミックな書き込みも1文になる"
+        "RunRepository の契約テストを追加 — 追加した時点で fake が落ちた",
+        "update を set_position / set_status に割り、port から削除",
+        "stop_run の書き込みは set_status ＋ 2セッターで意図が明示された"
       ]
     }
   ]

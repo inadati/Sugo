@@ -1,6 +1,6 @@
 //! Output port for run persistence.
 
-use crate::domain::run::Run;
+use crate::domain::run::{Run, RunStatus};
 use crate::error::CoreError;
 use async_trait::async_trait;
 
@@ -10,8 +10,27 @@ pub trait RunRepository: Send + Sync {
     async fn create(&self, run: &Run) -> Result<(), CoreError>;
     /// Fetch a run by id. Returns `Ok(None)` when not found.
     async fn get(&self, run_id: &str) -> Result<Option<Run>, CoreError>;
-    /// Overwrite the mutable fields of an existing run (status, current_cell_id, updated_at).
-    async fn update(&self, run: &Run) -> Result<(), CoreError>;
+    /// Move a run to `cell_id` with `status`, stamping `updated_at`.
+    ///
+    /// Writes exactly those three fields. Returns [`CoreError::NotFound`] when
+    /// the run does not exist.
+    async fn set_position(
+        &self,
+        run_id: &str,
+        cell_id: &str,
+        status: RunStatus,
+        updated_at: &str,
+    ) -> Result<(), CoreError>;
+    /// Set a run's `status`, stamping `updated_at`, leaving its position intact.
+    ///
+    /// Writes exactly those two fields. Returns [`CoreError::NotFound`] when
+    /// the run does not exist.
+    async fn set_status(
+        &self,
+        run_id: &str,
+        status: RunStatus,
+        updated_at: &str,
+    ) -> Result<(), CoreError>;
     /// List all runs for a given harness, newest first.
     async fn list_by_harness(&self, harness_id: &str) -> Result<Vec<Run>, CoreError>;
     /// Record a heartbeat timestamp for a run. No-op (Ok) if the run does not exist.
@@ -57,18 +76,35 @@ pub mod fake {
             Ok(self.runs.lock().unwrap().get(run_id).cloned())
         }
 
-        async fn update(&self, run: &Run) -> Result<(), CoreError> {
+        async fn set_position(
+            &self,
+            run_id: &str,
+            cell_id: &str,
+            status: RunStatus,
+            updated_at: &str,
+        ) -> Result<(), CoreError> {
             let mut map = self.runs.lock().unwrap();
-            let Some(stored) = map.get_mut(&run.id) else {
-                return Err(CoreError::NotFound(run.id.clone()));
+            let Some(stored) = map.get_mut(run_id) else {
+                return Err(CoreError::NotFound(run_id.to_string()));
             };
-            // Only the three mutable-by-update fields are copied across, because
-            // that is what the sqlite adapter writes. Replacing the whole stored
-            // `Run` here would let a usecase assign e.g. current_step_token,
-            // pass and then silently do nothing in production.
-            stored.current_cell_id = run.current_cell_id.clone();
-            stored.status = run.status.clone();
-            stored.updated_at = run.updated_at.clone();
+            stored.current_cell_id = cell_id.to_string();
+            stored.status = status;
+            stored.updated_at = updated_at.to_string();
+            Ok(())
+        }
+
+        async fn set_status(
+            &self,
+            run_id: &str,
+            status: RunStatus,
+            updated_at: &str,
+        ) -> Result<(), CoreError> {
+            let mut map = self.runs.lock().unwrap();
+            let Some(stored) = map.get_mut(run_id) else {
+                return Err(CoreError::NotFound(run_id.to_string()));
+            };
+            stored.status = status;
+            stored.updated_at = updated_at.to_string();
             Ok(())
         }
 

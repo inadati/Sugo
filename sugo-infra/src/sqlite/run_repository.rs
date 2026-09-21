@@ -89,21 +89,41 @@ impl RunRepository for SqliteRunRepository {
         Ok(row)
     }
 
-    async fn update(&self, run: &Run) -> Result<(), CoreError> {
+    async fn set_position(
+        &self,
+        run_id: &str,
+        cell_id: &str,
+        status: RunStatus,
+        updated_at: &str,
+    ) -> Result<(), CoreError> {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let n = conn
             .execute(
                 "UPDATE runs SET current_cell_id = ?1, status = ?2, updated_at = ?3 WHERE id = ?4",
-                rusqlite::params![
-                    run.current_cell_id,
-                    status_str(&run.status),
-                    run.updated_at,
-                    run.id
-                ],
+                rusqlite::params![cell_id, status_str(&status), updated_at, run_id],
             )
             .map_err(map_err)?;
         if n == 0 {
-            return Err(CoreError::NotFound(run.id.clone()));
+            return Err(CoreError::NotFound(run_id.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn set_status(
+        &self,
+        run_id: &str,
+        status: RunStatus,
+        updated_at: &str,
+    ) -> Result<(), CoreError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let n = conn
+            .execute(
+                "UPDATE runs SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![status_str(&status), updated_at, run_id],
+            )
+            .map_err(map_err)?;
+        if n == 0 {
+            return Err(CoreError::NotFound(run_id.to_string()));
         }
         Ok(())
     }
@@ -218,17 +238,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_run_persists_status_and_cell() {
+    async fn set_position_persists_status_and_cell() {
         let r = repo();
-        let mut run = sample_run("r1");
-        r.create(&run).await.unwrap();
-        run.current_cell_id = "c2".into();
-        run.status = RunStatus::Done;
-        run.updated_at = "2026-06-01T00:00:00+09:00".into();
-        r.update(&run).await.unwrap();
+        r.create(&sample_run("r1")).await.unwrap();
+        r.set_position("r1", "c2", RunStatus::Done, "2026-06-01T00:00:00+09:00")
+            .await
+            .unwrap();
         let got = r.get("r1").await.unwrap().unwrap();
         assert_eq!(got.current_cell_id, "c2");
         assert_eq!(got.status, RunStatus::Done);
+        assert_eq!(got.updated_at, "2026-06-01T00:00:00+09:00");
     }
 
     #[tokio::test]

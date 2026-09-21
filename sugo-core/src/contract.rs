@@ -253,74 +253,100 @@ pub async fn contract_run_duplicate_id_rejected<R: RunRepository>(repo: &R) {
     );
 }
 
-/// `update` writes current_cell_id, status and updated_at — and nothing else.
+/// `set_position` writes current_cell_id, status and updated_at — and nothing else.
 ///
 /// The "nothing else" half is the load-bearing assertion. `last_heartbeat_at`
 /// is written by the callback server in a different process, so a writer that
-/// persisted the whole entity would clobber it with a stale read. Both
-/// implementations must therefore ignore the other fields of the `Run` passed
-/// in, and a caller must never expect an assignment to them to stick.
-pub async fn contract_run_update_writes_only_position_and_status<R: RunRepository>(repo: &R) {
+/// persisted the whole entity would clobber it with a stale read. Every writer
+/// on this port therefore names exactly the fields it touches.
+pub async fn contract_run_set_position_writes_only_position_and_status<R: RunRepository>(repo: &R) {
     repo.create(&sample_run("r1", "h1", "c1"))
         .await
         .expect("create ok");
 
-    // Every field is altered in the value handed to `update`.
-    let mutated = Run {
-        id: "r1".into(),
-        harness_id: "other-harness".into(),
-        board_version_no: 99,
-        current_cell_id: "c2".into(),
-        status: RunStatus::Done,
-        project_path: Some("/somewhere/else".into()),
-        created_at: "2000-01-01T00:00:00+09:00".into(),
-        last_heartbeat_at: None,
-        updated_at: "2026-01-01T00:01:00+09:00".into(),
-        inject_pending_since: None,
-        current_step_token: None,
-    };
-    repo.update(&mutated).await.expect("update ok");
+    repo.set_position("r1", "c2", RunStatus::Done, "2026-01-01T00:01:00+09:00")
+        .await
+        .expect("set_position ok");
 
     let got = repo.get("r1").await.expect("get ok").expect("present");
     // Written.
     assert_eq!(got.current_cell_id, "c2");
     assert_eq!(got.status, RunStatus::Done);
     assert_eq!(got.updated_at, "2026-01-01T00:01:00+09:00");
-    // Ignored.
-    assert_eq!(got.harness_id, "h1", "update must not rewrite harness_id");
-    assert_eq!(got.board_version_no, 3, "update must not repin the board");
-    assert_eq!(
-        got.project_path.as_deref(),
-        Some("/abs/project"),
-        "update must not rewrite project_path"
-    );
-    assert_eq!(
-        got.created_at, "2026-01-01T00:00:00+09:00",
-        "update must not rewrite created_at"
-    );
+    // Untouched.
+    assert_eq!(got.harness_id, "h1");
+    assert_eq!(got.board_version_no, 3, "the pinned board must not move");
+    assert_eq!(got.project_path.as_deref(), Some("/abs/project"));
+    assert_eq!(got.created_at, "2026-01-01T00:00:00+09:00");
     assert_eq!(
         got.last_heartbeat_at.as_deref(),
         Some("2026-01-01T00:00:05+09:00"),
-        "update must not clear a heartbeat written by another process"
+        "must not clear a heartbeat written by another process"
     );
     assert_eq!(
         got.inject_pending_since.as_deref(),
         Some("2026-01-01T00:00:04+09:00"),
-        "update must not clear the inject gate; use set_inject_pending"
+        "must not clear the inject gate; use set_inject_pending"
     );
     assert_eq!(
         got.current_step_token.as_deref(),
         Some("tok-seed"),
-        "update must not clear the step token; use set_step_token"
+        "must not consume the step token; use set_step_token"
     );
 }
 
-/// `update` of an unknown run id is NotFound.
-pub async fn contract_run_update_missing_is_not_found<R: RunRepository>(repo: &R) {
-    let err = repo
-        .update(&sample_run("nope", "h1", "c1"))
+/// `set_status` writes status and updated_at — and nothing else, in particular
+/// not the run's position.
+pub async fn contract_run_set_status_writes_only_status<R: RunRepository>(repo: &R) {
+    repo.create(&sample_run("r1", "h1", "c1"))
         .await
-        .expect_err("update of a missing run must fail");
+        .expect("create ok");
+
+    repo.set_status("r1", RunStatus::Closed, "2026-01-01T00:01:00+09:00")
+        .await
+        .expect("set_status ok");
+
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(got.status, RunStatus::Closed);
+    assert_eq!(got.updated_at, "2026-01-01T00:01:00+09:00");
+    assert_eq!(
+        got.current_cell_id, "c1",
+        "the cell the run died on is kept as history"
+    );
+    assert_eq!(
+        got.last_heartbeat_at.as_deref(),
+        Some("2026-01-01T00:00:05+09:00")
+    );
+    assert_eq!(
+        got.current_step_token.as_deref(),
+        Some("tok-seed"),
+        "set_status alone must not consume the step token"
+    );
+}
+
+/// The position/status writers report NotFound for an unknown run id.
+///
+/// Unlike the fire-and-forget setters, these back usecases that must fail
+/// loudly rather than pretend a missing run was advanced or stopped.
+pub async fn contract_run_writers_report_missing_run<R: RunRepository>(repo: &R) {
+    let err = repo
+        .set_position(
+            "nope",
+            "c2",
+            RunStatus::Running,
+            "2026-01-01T00:01:00+09:00",
+        )
+        .await
+        .expect_err("set_position on a missing run must fail");
+    assert!(
+        matches!(err, CoreError::NotFound(_)),
+        "expected NotFound, got {err:?}"
+    );
+
+    let err = repo
+        .set_status("nope", RunStatus::Closed, "2026-01-01T00:01:00+09:00")
+        .await
+        .expect_err("set_status on a missing run must fail");
     assert!(
         matches!(err, CoreError::NotFound(_)),
         "expected NotFound, got {err:?}"
@@ -538,13 +564,18 @@ mod run_tests {
     }
 
     #[tokio::test]
-    async fn fake_passes_update_writes_only_position_and_status() {
-        contract_run_update_writes_only_position_and_status(&repo()).await;
+    async fn fake_passes_set_position_writes_only_position_and_status() {
+        contract_run_set_position_writes_only_position_and_status(&repo()).await;
     }
 
     #[tokio::test]
-    async fn fake_passes_update_missing_is_not_found() {
-        contract_run_update_missing_is_not_found(&repo()).await;
+    async fn fake_passes_set_status_writes_only_status() {
+        contract_run_set_status_writes_only_status(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_writers_report_missing_run() {
+        contract_run_writers_report_missing_run(&repo()).await;
     }
 
     #[tokio::test]

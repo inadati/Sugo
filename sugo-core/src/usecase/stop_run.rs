@@ -46,7 +46,7 @@ pub async fn stop_run(
     clock: &dyn IdClock,
     input: StopRunInput,
 ) -> Result<StopRunOutput, CoreError> {
-    let mut run = run_repo
+    let run = run_repo
         .get(&input.run_id)
         .await?
         .ok_or_else(|| CoreError::NotFound(format!("run not found: {}", input.run_id)))?;
@@ -57,12 +57,12 @@ pub async fn stop_run(
     );
 
     if was_in_flight {
-        run.status = RunStatus::Closed;
-        run.updated_at = clock.now_iso();
-        run_repo.update(&run).await?;
-        // `update` only overwrites status / current_cell_id / updated_at, so the
-        // inject gate and the step token have to be cleared through their own
-        // setters — assigning them on the struct above would silently do nothing.
+        run_repo
+            .set_status(&run.id, RunStatus::Closed, &clock.now_iso())
+            .await?;
+        // Each writer names the fields it touches, so the inject gate and the
+        // step token are cleared explicitly rather than as a side effect of
+        // persisting the entity.
         run_repo.set_inject_pending(&run.id, None).await?;
         run_repo.set_step_token(&run.id, None).await?;
     }

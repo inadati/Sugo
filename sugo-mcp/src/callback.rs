@@ -90,12 +90,11 @@ async fn handle_session_event(
     State(st): State<CallbackState>,
     Json(req): Json<SessionEventReq>,
 ) -> Json<Value> {
-    if let Some(status) = status_for_reason(&req.reason)
-        && let Ok(Some(mut run)) = st.run_repo.get(&req.run_id).await
-    {
-        run.status = status;
-        run.updated_at = st.clock.now_iso();
-        let _ = st.run_repo.update(&run).await;
+    if let Some(status) = status_for_reason(&req.reason) {
+        let _ = st
+            .run_repo
+            .set_status(&req.run_id, status, &st.clock.now_iso())
+            .await;
     }
     Json(json!({ "status": "ok" }))
 }

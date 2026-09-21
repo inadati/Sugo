@@ -33,7 +33,7 @@ pub async fn advance_run(
     clock: &dyn IdClock,
     input: AdvanceRunInput,
 ) -> Result<AdvanceRunOutput, CoreError> {
-    let mut run = run_repo
+    let run = run_repo
         .get(&input.run_id)
         .await?
         .ok_or_else(|| CoreError::NotFound(format!("run not found: {}", input.run_id)))?;
@@ -70,13 +70,15 @@ pub async fn advance_run(
         .find(|c| c.id == edge.to)
         .ok_or_else(|| CoreError::Storage(format!("target cell '{}' not found", edge.to)))?;
 
-    // Transition the run
-    run.current_cell_id = next_cell.id.clone();
-    if next_cell.terminal {
-        run.status = RunStatus::Done;
-    }
-    run.updated_at = clock.now_iso();
-    run_repo.update(&run).await?;
+    // Transition the run: one write that names exactly the fields it touches.
+    let next_status = if next_cell.terminal {
+        RunStatus::Done
+    } else {
+        run.status.clone()
+    };
+    run_repo
+        .set_position(&run.id, &next_cell.id, next_status, &clock.now_iso())
+        .await?;
 
     let outgoing_edges = def
         .edges

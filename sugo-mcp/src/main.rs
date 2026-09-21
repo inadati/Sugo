@@ -479,7 +479,7 @@ impl SugoServer {
         // After 30 s without an ack the inject is considered lost; mark the run Stalled
         // so the caller gets a hard error instead of being blocked forever.
         const INJECT_TIMEOUT_SECS: i64 = 30;
-        if let Ok(Some(mut run)) = self.run_repo.get(&args.run_id).await
+        if let Ok(Some(run)) = self.run_repo.get(&args.run_id).await
             && let Some(ref pending_since) = run.inject_pending_since
         {
             let elapsed = chrono::DateTime::parse_from_rfc3339(pending_since)
@@ -494,9 +494,14 @@ impl SugoServer {
                 ));
             }
             // Timeout: ack never arrived — mark run Stalled and fail hard.
-            run.status = sugo_core::domain::run::RunStatus::Stalled;
-            run.updated_at = self.clock.now_iso();
-            let _ = self.run_repo.update(&run).await;
+            let _ = self
+                .run_repo
+                .set_status(
+                    &run.id,
+                    sugo_core::domain::run::RunStatus::Stalled,
+                    &self.clock.now_iso(),
+                )
+                .await;
             return Err(ErrorData::invalid_params(
                 format!(
                     "inject timeout: Nipper did not acknowledge the inject after {elapsed}s. \

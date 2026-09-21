@@ -566,13 +566,18 @@ mod run_contract {
     }
 
     #[tokio::test]
-    async fn sqlite_passes_update_writes_only_position_and_status() {
-        contract::contract_run_update_writes_only_position_and_status(&repo()).await;
+    async fn sqlite_passes_set_position_writes_only_position_and_status() {
+        contract::contract_run_set_position_writes_only_position_and_status(&repo()).await;
     }
 
     #[tokio::test]
-    async fn sqlite_passes_update_missing_is_not_found() {
-        contract::contract_run_update_missing_is_not_found(&repo()).await;
+    async fn sqlite_passes_set_status_writes_only_status() {
+        contract::contract_run_set_status_writes_only_status(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_writers_report_missing_run() {
+        contract::contract_run_writers_report_missing_run(&repo()).await;
     }
 
     #[tokio::test]
