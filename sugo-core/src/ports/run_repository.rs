@@ -59,10 +59,16 @@ pub mod fake {
 
         async fn update(&self, run: &Run) -> Result<(), CoreError> {
             let mut map = self.runs.lock().unwrap();
-            if !map.contains_key(&run.id) {
+            let Some(stored) = map.get_mut(&run.id) else {
                 return Err(CoreError::NotFound(run.id.clone()));
-            }
-            map.insert(run.id.clone(), run.clone());
+            };
+            // Only the three mutable-by-update fields are copied across, because
+            // that is what the sqlite adapter writes. Replacing the whole stored
+            // `Run` here would let a usecase assign e.g. current_step_token,
+            // pass and then silently do nothing in production.
+            stored.current_cell_id = run.current_cell_id.clone();
+            stored.status = run.status.clone();
+            stored.updated_at = run.updated_at.clone();
             Ok(())
         }
 

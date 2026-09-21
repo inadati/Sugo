@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Sugo RunRepository — 現状と理想",
+    "output": "run-repository-current-vs-ideal.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/inadati/Sugo",
+      "revision": "2bd2a3ffd3cfd215c77e29fc6be87a255cf71040"
+    },
+    "views": [
+      {
+        "id": "now",
+        "label": "現状: 型が嘘をつく",
+        "focus": [
+          "callers",
+          "update_now",
+          "sqlite_now",
+          "fake_now"
+        ],
+        "note": "update は Run 全11フィールドを受け取るのに、SQLite は3カラムしか書かない。"
+      },
+      {
+        "id": "ideal",
+        "label": "理想: 名前が書く先を決める",
+        "focus": [
+          "callers",
+          "port_ideal",
+          "sqlite_ideal",
+          "fake_ideal",
+          "contract"
+        ],
+        "note": "意図名メソッドに割り、両実装を1組の契約テストへ通す。"
+      },
+      {
+        "id": "precedent",
+        "label": "手本は同じリポジトリ内",
+        "focus": [
+          "harness",
+          "contract"
+        ],
+        "note": "HarnessRepository は既に意図名のみで、contract.rs で両実装が突き合わせ済み。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "callers",
+      "type": "backend",
+      "label": "呼び出し側 4箇所",
+      "sublabel": "advance_run / stop_run / callback / stall判定",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        250,
+        84
+      ],
+      "sources": [
+        {
+          "path": "sugo-core/src/usecase/advance_run.rs",
+          "line": 79
+        }
+      ]
+    },
+    {
+      "id": "update_now",
+      "type": "backend",
+      "label": "update(&Run)",
+      "sublabel": "Run 全11フィールドを受け取る",
+      "tag": "heartbeat / inject_pending / step_token は別系統のセッター",
+      "pos": [
+        340,
+        140
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "sources": [
+        {
+          "path": "sugo-core/src/ports/run_repository.rs",
+          "line": 14
+        }
+      ]
+    },
+    {
+      "id": "sqlite_now",
+      "type": "database",
+      "label": "SQLite 実装",
+      "sublabel": "3カラムだけ UPDATE",
+      "tag": "残り8フィールドは黙って捨てる",
+      "pos": [
+        680,
+        90
+      ],
+      "size": [
+        240,
+        74
+      ],
+      "sources": [
+        {
+          "path": "sugo-infra/src/sqlite/run_repository.rs",
+          "line": 96
+        }
+      ]
+    },
+    {
+      "id": "fake_now",
+      "type": "database",
+      "label": "InMemory fake",
+      "sublabel": "run 全体を差し替える — 一致は未検証",
+      "tag": "SQLite との一致は誰も検証していない",
+      "pos": [
+        680,
+        215
+      ],
+      "size": [
+        240,
+        74
+      ],
+      "sources": [
+        {
+          "path": "sugo-core/src/ports/run_repository.rs",
+          "line": 60
+        }
+      ]
+    },
+    {
+      "id": "port_ideal",
+      "type": "backend",
+      "label": "意図名メソッドのみ",
+      "sublabel": "set_position / set_status ＋ 既存セッター3種",
+      "pos": [
+        340,
+        440
+      ],
+      "size": [
+        240,
+        96
+      ]
+    },
+    {
+      "id": "sqlite_ideal",
+      "type": "database",
+      "label": "SQLite 実装",
+      "sublabel": "メソッド名＝書くカラム",
+      "pos": [
+        680,
+        400
+      ],
+      "size": [
+        240,
+        74
+      ]
+    },
+    {
+      "id": "fake_ideal",
+      "type": "database",
+      "label": "InMemory fake",
+      "sublabel": "同じ契約に従う",
+      "pos": [
+        680,
+        525
+      ],
+      "size": [
+        240,
+        74
+      ]
+    },
+    {
+      "id": "contract",
+      "type": "security",
+      "label": "contract.rs 共有契約テスト",
+      "sublabel": "両実装を1組のアサーションへ通す",
+      "pos": [
+        1020,
+        440
+      ],
+      "size": [
+        240,
+        96
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "external",
+      "label": "HarnessRepository",
+      "sublabel": "既に意図名のみ＋契約テスト済み",
+      "tag": "手本",
+      "pos": [
+        1020,
+        143
+      ],
+      "size": [
+        240,
+        74
+      ],
+      "sources": [
+        {
+          "path": "sugo-core/src/contract.rs",
+          "line": 82
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "現状 — 型が振る舞いより多くを約束している",
+      "wraps": [
+        "update_now",
+        "sqlite_now",
+        "fake_now"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "理想 — 名前が書く先を決め、契約が両実装を縛る",
+      "wraps": [
+        "port_ideal",
+        "sqlite_ideal",
+        "fake_ideal",
+        "contract"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "callers-now",
+      "from": "callers",
+      "to": "update_now",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "now-sqlite",
+      "from": "update_now",
+      "to": "sqlite_now",
+      "label": "3 / 11 カラム"
+    },
+    {
+      "id": "now-fake",
+      "from": "update_now",
+      "to": "fake_now",
+      "label": "11 / 11 カラム"
+    },
+    {
+      "id": "callers-ideal",
+      "from": "callers",
+      "to": "port_ideal",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "ideal-sqlite",
+      "from": "port_ideal",
+      "to": "sqlite_ideal",
+      "label": "宣言どおり書く"
+    },
+    {
+      "id": "ideal-fake",
+      "from": "port_ideal",
+      "to": "fake_ideal",
+      "label": "宣言どおり書く"
+    },
+    {
+      "id": "contract-sqlite",
+      "from": "contract",
+      "to": "sqlite_ideal",
+      "label": "同じ検証",
+      "variant": "security"
+    },
+    {
+      "id": "contract-fake",
+      "from": "contract",
+      "to": "fake_ideal",
+      "label": "同じ検証",
+      "variant": "security"
+    },
+    {
+      "id": "precedent",
+      "from": "harness",
+      "to": "contract",
+      "label": "同じ仕組みが既に稼働中",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "現状の欠陥",
+      "items": [
+        "update(&Run) はこのコードベースで唯一のエンティティ型の書き込み",
+        "型は11フィールド、SQLite は3カラム — 差分は無言で消える",
+        "RunRepository には契約テストが一つも無い"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "update を広げるのは誤った修正",
+      "items": [
+        "heartbeat は callback HTTP が別プロセスから書く",
+        "全カラム UPDATE にすると古い heartbeat で上書きしてしまう",
+        "狭いこと自体は正しく、狭さが型に現れていないのが問題"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "理想への2手",
+      "items": [
+        "先に RunRepository の契約テストを足し、乖離を検出可能にする",
+        "次に update を set_position / set_status に割る",
+        "stop_run の3回の非アトミックな書き込みも1文になる"
+      ]
+    }
+  ]
+}

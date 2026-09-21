@@ -18,9 +18,11 @@ use crate::domain::board::BoardDefinition;
 use crate::domain::cell::{Cell, CellStatus};
 use crate::domain::edge::Edge;
 use crate::domain::harness::{BoardVersion, Harness};
+use crate::domain::run::{Run, RunStatus};
 use crate::error::CoreError;
 use crate::ports::id_clock::IdClock;
 use crate::ports::repository::HarnessRepository;
+use crate::ports::run_repository::RunRepository;
 
 fn sample_board(prompt: &str) -> BoardDefinition {
     BoardDefinition {
@@ -201,6 +203,229 @@ pub async fn contract_list_returns_created<R: HarnessRepository>(repo: &R) {
     assert!(listed.iter().any(|x| x.id == "h1"));
 }
 
+// ── RunRepository ───────────────────────────────────────────────────────────
+//
+// The same fake-vs-sqlite discipline applied to the run port. Without these,
+// `InMemoryRunRepository` and `SqliteRunRepository` were free to disagree: the
+// fake replaced a whole stored `Run`, while sqlite wrote a narrow subset of
+// columns. A usecase that assigned a field and called the broad writer then
+// worked against the fake and silently did nothing in production.
+
+/// A run with every field populated, so a writer that clobbers an unrelated
+/// field is detectable rather than indistinguishable from `None`.
+fn sample_run(id: &str, harness_id: &str, cell_id: &str) -> Run {
+    Run {
+        id: id.into(),
+        harness_id: harness_id.into(),
+        board_version_no: 3,
+        current_cell_id: cell_id.into(),
+        status: RunStatus::Running,
+        project_path: Some("/abs/project".into()),
+        created_at: "2026-01-01T00:00:00+09:00".into(),
+        last_heartbeat_at: Some("2026-01-01T00:00:05+09:00".into()),
+        updated_at: "2026-01-01T00:00:05+09:00".into(),
+        inject_pending_since: Some("2026-01-01T00:00:04+09:00".into()),
+        current_step_token: Some("tok-seed".into()),
+    }
+}
+
+/// Every field survives a create/get round trip unchanged.
+pub async fn contract_run_create_get_roundtrip<R: RunRepository>(repo: &R) {
+    let run = sample_run("r1", "h1", "c1");
+    repo.create(&run).await.expect("create ok");
+
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(got, run, "create/get must not alter any field");
+}
+
+/// get of a non-existent run id returns None rather than erroring.
+pub async fn contract_run_get_missing_returns_none<R: RunRepository>(repo: &R) {
+    assert!(repo.get("nope").await.expect("get ok").is_none());
+}
+
+/// Creating the same run id twice is rejected.
+pub async fn contract_run_duplicate_id_rejected<R: RunRepository>(repo: &R) {
+    let run = sample_run("r1", "h1", "c1");
+    repo.create(&run).await.expect("create ok");
+    assert!(
+        repo.create(&run).await.is_err(),
+        "duplicate run id must be rejected"
+    );
+}
+
+/// `update` writes current_cell_id, status and updated_at — and nothing else.
+///
+/// The "nothing else" half is the load-bearing assertion. `last_heartbeat_at`
+/// is written by the callback server in a different process, so a writer that
+/// persisted the whole entity would clobber it with a stale read. Both
+/// implementations must therefore ignore the other fields of the `Run` passed
+/// in, and a caller must never expect an assignment to them to stick.
+pub async fn contract_run_update_writes_only_position_and_status<R: RunRepository>(repo: &R) {
+    repo.create(&sample_run("r1", "h1", "c1"))
+        .await
+        .expect("create ok");
+
+    // Every field is altered in the value handed to `update`.
+    let mutated = Run {
+        id: "r1".into(),
+        harness_id: "other-harness".into(),
+        board_version_no: 99,
+        current_cell_id: "c2".into(),
+        status: RunStatus::Done,
+        project_path: Some("/somewhere/else".into()),
+        created_at: "2000-01-01T00:00:00+09:00".into(),
+        last_heartbeat_at: None,
+        updated_at: "2026-01-01T00:01:00+09:00".into(),
+        inject_pending_since: None,
+        current_step_token: None,
+    };
+    repo.update(&mutated).await.expect("update ok");
+
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    // Written.
+    assert_eq!(got.current_cell_id, "c2");
+    assert_eq!(got.status, RunStatus::Done);
+    assert_eq!(got.updated_at, "2026-01-01T00:01:00+09:00");
+    // Ignored.
+    assert_eq!(got.harness_id, "h1", "update must not rewrite harness_id");
+    assert_eq!(got.board_version_no, 3, "update must not repin the board");
+    assert_eq!(
+        got.project_path.as_deref(),
+        Some("/abs/project"),
+        "update must not rewrite project_path"
+    );
+    assert_eq!(
+        got.created_at, "2026-01-01T00:00:00+09:00",
+        "update must not rewrite created_at"
+    );
+    assert_eq!(
+        got.last_heartbeat_at.as_deref(),
+        Some("2026-01-01T00:00:05+09:00"),
+        "update must not clear a heartbeat written by another process"
+    );
+    assert_eq!(
+        got.inject_pending_since.as_deref(),
+        Some("2026-01-01T00:00:04+09:00"),
+        "update must not clear the inject gate; use set_inject_pending"
+    );
+    assert_eq!(
+        got.current_step_token.as_deref(),
+        Some("tok-seed"),
+        "update must not clear the step token; use set_step_token"
+    );
+}
+
+/// `update` of an unknown run id is NotFound.
+pub async fn contract_run_update_missing_is_not_found<R: RunRepository>(repo: &R) {
+    let err = repo
+        .update(&sample_run("nope", "h1", "c1"))
+        .await
+        .expect_err("update of a missing run must fail");
+    assert!(
+        matches!(err, CoreError::NotFound(_)),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+/// `update_heartbeat` writes only last_heartbeat_at.
+pub async fn contract_run_heartbeat_writes_only_heartbeat<R: RunRepository>(repo: &R) {
+    repo.create(&sample_run("r1", "h1", "c1"))
+        .await
+        .expect("create ok");
+    repo.update_heartbeat("r1", "2026-01-01T00:02:00+09:00")
+        .await
+        .expect("heartbeat ok");
+
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(
+        got.last_heartbeat_at.as_deref(),
+        Some("2026-01-01T00:02:00+09:00")
+    );
+    assert_eq!(got.current_cell_id, "c1");
+    assert_eq!(got.status, RunStatus::Running);
+    assert_eq!(got.updated_at, "2026-01-01T00:00:05+09:00");
+}
+
+/// `set_inject_pending` round-trips Some then None, touching nothing else.
+pub async fn contract_run_set_inject_pending_roundtrip<R: RunRepository>(repo: &R) {
+    repo.create(&sample_run("r1", "h1", "c1"))
+        .await
+        .expect("create ok");
+
+    repo.set_inject_pending("r1", Some("2026-01-01T00:03:00+09:00"))
+        .await
+        .expect("set ok");
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(
+        got.inject_pending_since.as_deref(),
+        Some("2026-01-01T00:03:00+09:00")
+    );
+    assert_eq!(got.current_step_token.as_deref(), Some("tok-seed"));
+
+    repo.set_inject_pending("r1", None).await.expect("clear ok");
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(got.inject_pending_since, None);
+    assert_eq!(
+        got.current_step_token.as_deref(),
+        Some("tok-seed"),
+        "clearing the inject gate must not consume the step token"
+    );
+}
+
+/// `set_step_token` round-trips Some then None, touching nothing else.
+pub async fn contract_run_set_step_token_roundtrip<R: RunRepository>(repo: &R) {
+    repo.create(&sample_run("r1", "h1", "c1"))
+        .await
+        .expect("create ok");
+
+    repo.set_step_token("r1", Some("tok-next"))
+        .await
+        .expect("set ok");
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(got.current_step_token.as_deref(), Some("tok-next"));
+
+    repo.set_step_token("r1", None).await.expect("clear ok");
+    let got = repo.get("r1").await.expect("get ok").expect("present");
+    assert_eq!(got.current_step_token, None);
+    assert_eq!(
+        got.inject_pending_since.as_deref(),
+        Some("2026-01-01T00:00:04+09:00"),
+        "consuming the step token must not clear the inject gate"
+    );
+}
+
+/// The narrow setters are no-ops on an unknown run id, not errors.
+///
+/// They are called from fire-and-forget paths (the callback HTTP handlers),
+/// where a run that has since been purged must not turn into an error path.
+pub async fn contract_run_setters_ignore_missing_run<R: RunRepository>(repo: &R) {
+    repo.update_heartbeat("nope", "2026-01-01T00:02:00+09:00")
+        .await
+        .expect("heartbeat on missing run is a no-op");
+    repo.set_inject_pending("nope", Some("2026-01-01T00:02:00+09:00"))
+        .await
+        .expect("set_inject_pending on missing run is a no-op");
+    repo.set_step_token("nope", Some("tok"))
+        .await
+        .expect("set_step_token on missing run is a no-op");
+}
+
+/// `list_by_harness` returns only that harness's runs, newest first.
+pub async fn contract_run_list_by_harness_is_newest_first<R: RunRepository>(repo: &R) {
+    let mut older = sample_run("r-old", "h1", "c1");
+    older.created_at = "2026-01-01T00:00:00+09:00".into();
+    let mut newer = sample_run("r-new", "h1", "c2");
+    newer.created_at = "2026-01-02T00:00:00+09:00".into();
+    let other = sample_run("r-other", "h2", "c1");
+    repo.create(&older).await.expect("create ok");
+    repo.create(&newer).await.expect("create ok");
+    repo.create(&other).await.expect("create ok");
+
+    let listed = repo.list_by_harness("h1").await.expect("list ok");
+    let ids: Vec<&str> = listed.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec!["r-new", "r-old"]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +505,70 @@ mod tests {
         assert_eq!(stored_v.content_hash, real_hash);
         // Re-computing from the retrieved definition must also match.
         assert_eq!(content_hash(&stored_v.definition), stored_v.content_hash);
+    }
+}
+
+/// The run contract, run against `InMemoryRunRepository`.
+///
+/// sugo-infra runs the same functions against `SqliteRunRepository`; any
+/// behaviour the two do not share shows up here or there rather than as a
+/// usecase that works in tests and does nothing in production.
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+    use crate::ports::run_repository::fake::InMemoryRunRepository;
+
+    fn repo() -> InMemoryRunRepository {
+        InMemoryRunRepository::new()
+    }
+
+    #[tokio::test]
+    async fn fake_passes_create_get_roundtrip() {
+        contract_run_create_get_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_get_missing_returns_none() {
+        contract_run_get_missing_returns_none(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_duplicate_id_rejected() {
+        contract_run_duplicate_id_rejected(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_update_writes_only_position_and_status() {
+        contract_run_update_writes_only_position_and_status(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_update_missing_is_not_found() {
+        contract_run_update_missing_is_not_found(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_heartbeat_writes_only_heartbeat() {
+        contract_run_heartbeat_writes_only_heartbeat(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_set_inject_pending_roundtrip() {
+        contract_run_set_inject_pending_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_set_step_token_roundtrip() {
+        contract_run_set_step_token_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_setters_ignore_missing_run() {
+        contract_run_setters_ignore_missing_run(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn fake_passes_list_by_harness_is_newest_first() {
+        contract_run_list_by_harness_is_newest_first(&repo()).await;
     }
 }

@@ -532,3 +532,71 @@ mod contract {
         contract::contract_list_returns_created(&repo()).await;
     }
 }
+
+/// The run contract, run against `SqliteRunRepository`.
+///
+/// sugo-core runs the same functions against `InMemoryRunRepository`. Keeping
+/// both sides on one set of assertions is what stops the fake from drifting
+/// away from the adapter that actually ships.
+mod run_contract {
+    use std::sync::Mutex;
+    use sugo_core::contract;
+    use sugo_infra::sqlite::SqliteRunRepository;
+    use sugo_infra::sqlite::schema::SCHEMA;
+
+    fn repo() -> SqliteRunRepository {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        SqliteRunRepository::new(Mutex::new(conn))
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_create_get_roundtrip() {
+        contract::contract_run_create_get_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_get_missing_returns_none() {
+        contract::contract_run_get_missing_returns_none(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_duplicate_id_rejected() {
+        contract::contract_run_duplicate_id_rejected(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_update_writes_only_position_and_status() {
+        contract::contract_run_update_writes_only_position_and_status(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_update_missing_is_not_found() {
+        contract::contract_run_update_missing_is_not_found(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_heartbeat_writes_only_heartbeat() {
+        contract::contract_run_heartbeat_writes_only_heartbeat(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_set_inject_pending_roundtrip() {
+        contract::contract_run_set_inject_pending_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_set_step_token_roundtrip() {
+        contract::contract_run_set_step_token_roundtrip(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_setters_ignore_missing_run() {
+        contract::contract_run_setters_ignore_missing_run(&repo()).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_passes_list_by_harness_is_newest_first() {
+        contract::contract_run_list_by_harness_is_newest_first(&repo()).await;
+    }
+}
