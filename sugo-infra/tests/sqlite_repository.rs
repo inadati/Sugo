@@ -605,3 +605,43 @@ mod run_contract {
         contract::contract_run_list_by_harness_is_newest_first(&repo()).await;
     }
 }
+
+/// ハーネス "h1" を作成し trash した状態にして返す。purge 系テストの共通セット
+/// アップ。
+async fn create_trashed_harness(repo: &SqliteHarnessRepository) -> String {
+    let (h, v) = helpers::sample();
+    repo.create(&h, &v).await.expect("seed");
+    repo.trash_harness("h1", "2026-06-30T10:00:00+09:00")
+        .await
+        .expect("trash");
+    h.id
+}
+
+/// ハーネスを完全削除すると、そのハーネスに紐づくセル座標
+/// (`cell_positions`) も一緒に削除されることを確認する。`cell_positions.
+/// harness_id` は `harnesses(id)` への外部キーなので、座標を残したまま
+/// `harnesses` 行を消そうとすると `PRAGMA foreign_keys = ON` の下で失敗する。
+#[tokio::test]
+async fn purge_also_removes_cell_positions() {
+    use std::sync::Mutex;
+    use sugo_core::domain::cell_position::CellPosition;
+    use sugo_core::ports::cell_position_repository::CellPositionRepository;
+    use sugo_infra::sqlite::SqliteCellPositionRepository;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sugo.db").to_string_lossy().into_owned();
+    let repo = SqliteHarnessRepository::open(&path).expect("open");
+
+    let harness_id = create_trashed_harness(&repo).await;
+
+    let conn = rusqlite::Connection::open(&path).expect("open");
+    let pos_repo = SqliteCellPositionRepository::new(Mutex::new(conn));
+    pos_repo
+        .replace_all(&harness_id, &[CellPosition { cell_id: "c1".into(), x: 1.0, y: 2.0 }])
+        .await
+        .expect("replace ok");
+
+    repo.purge_harness(&harness_id).await.expect("purge ok");
+
+    assert_eq!(pos_repo.list(&harness_id).await.expect("list ok"), vec![]);
+}

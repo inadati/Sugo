@@ -325,6 +325,8 @@ impl HarnessRepository for SqliteHarnessRepository {
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(map_err)?;
+        tx.execute("DELETE FROM cell_positions WHERE harness_id = ?1", [id])
+            .map_err(map_err)?;
         tx.execute("DELETE FROM board_versions WHERE harness_id = ?1", [id])
             .map_err(map_err)?;
         tx.execute("DELETE FROM runs WHERE harness_id = ?1", [id])
