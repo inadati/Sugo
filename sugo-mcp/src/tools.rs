@@ -249,6 +249,40 @@ pub struct MoveHarnessArgs {
     pub folder_id: Option<String>,
 }
 
+/// Arguments for `sugo_get_layout`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetLayoutArgs {
+    /// Target harness id.
+    pub harness_id: String,
+}
+
+/// One cell's display position. x/y are the cell's center coordinates.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PositionArg {
+    /// Cell id. Must exist in the harness's current board version.
+    pub cell_id: String,
+    /// Center x coordinate.
+    pub x: f64,
+    /// Center y coordinate.
+    pub y: f64,
+}
+
+/// Arguments for `sugo_set_layout`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetLayoutArgs {
+    /// Target harness id.
+    pub harness_id: String,
+    /// Positions to overwrite. Cells not listed keep their current position.
+    pub positions: Vec<PositionArg>,
+}
+
+/// Arguments for `sugo_relayout`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RelayoutArgs {
+    /// Target harness id.
+    pub harness_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +500,39 @@ mod tests {
         let res: Result<CellAddArgs, _> =
             serde_json::from_str(r#"{"id":"c9","name":"ninth","prompt":"p","status":"active"}"#);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn set_layout_args_round_trip() {
+        let v = serde_json::json!({
+            "harness_id": "h1",
+            "positions": [{ "cell_id": "c1", "x": 1.5, "y": 2.5 }]
+        });
+        let args: SetLayoutArgs = serde_json::from_value(v).expect("deserialize ok");
+        assert_eq!(args.harness_id, "h1");
+        assert_eq!(args.positions.len(), 1);
+        assert_eq!(args.positions[0].cell_id, "c1");
+        assert_eq!(args.positions[0].x, 1.5);
+        assert_eq!(args.positions[0].y, 2.5);
+    }
+
+    #[test]
+    fn set_layout_args_missing_positions_errors() {
+        let v = serde_json::json!({ "harness_id": "h1" });
+        serde_json::from_value::<SetLayoutArgs>(v).expect_err("positions is required");
+    }
+
+    #[test]
+    fn get_layout_args_round_trip() {
+        let v = serde_json::json!({ "harness_id": "h1" });
+        let args: GetLayoutArgs = serde_json::from_value(v).expect("deserialize ok");
+        assert_eq!(args.harness_id, "h1");
+    }
+
+    #[test]
+    fn relayout_args_round_trip() {
+        let v = serde_json::json!({ "harness_id": "h1" });
+        let args: RelayoutArgs = serde_json::from_value(v).expect("deserialize ok");
+        assert_eq!(args.harness_id, "h1");
     }
 }

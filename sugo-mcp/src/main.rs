@@ -18,6 +18,7 @@ use std::sync::Arc;
 use sugo_core::ports::id_clock::IdClock;
 use sugo_core::ports::repository::HarnessRepository;
 use sugo_core::ports::run_repository::RunRepository;
+use sugo_infra::sqlite::SqliteCellPositionRepository;
 use sugo_infra::sqlite::SqliteHarnessRepository;
 use sugo_infra::sqlite::SqliteRunRepository;
 use tools::RealIdClock;
@@ -26,6 +27,7 @@ use tools::RealIdClock;
 struct SugoServer {
     repo: Arc<SqliteHarnessRepository>,
     run_repo: Arc<SqliteRunRepository>,
+    pos_repo: Arc<SqliteCellPositionRepository>,
     clock: Arc<RealIdClock>,
     /// Callback base URL this process advertises to Nipper at /attach time.
     callback_url: String,
@@ -47,6 +49,7 @@ impl SugoServer {
     fn new(
         repo: Arc<SqliteHarnessRepository>,
         run_repo: Arc<SqliteRunRepository>,
+        pos_repo: Arc<SqliteCellPositionRepository>,
         callback_url: String,
         nipper_base: String,
         token_path: String,
@@ -54,6 +57,7 @@ impl SugoServer {
         Self {
             repo,
             run_repo,
+            pos_repo,
             clock: Arc::new(RealIdClock),
             callback_url,
             nipper_base,
@@ -294,6 +298,149 @@ impl SugoServer {
             "status": cell.status,
             "terminal": cell.terminal,
             "memo": cell.request_memo,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Read the display positions of a harness's cells.
+    #[tool(
+        description = "Get a harness's cell display layout: { harness_id, cells:[{cell_id, \
+        name, x, y}], edges:[{from,to,label}] }. x/y are the cell's CENTER coordinates and \
+        are null for cells that have no saved position (those are auto-placed by the GUI on \
+        next render). Use this before sugo_set_layout so a repositioning is grounded in the \
+        actual current layout."
+    )]
+    async fn sugo_get_layout(
+        &self,
+        Parameters(args): Parameters<tools::GetLayoutArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::ports::cell_position_repository::CellPositionRepository;
+        use sugo_core::usecase::get_status::get_status;
+
+        let st = get_status(self.repo.as_ref(), &args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+        let saved = self
+            .pos_repo
+            .list(&args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let by_id: std::collections::HashMap<&str, &sugo_core::domain::cell_position::CellPosition> =
+            saved.iter().map(|p| (p.cell_id.as_str(), p)).collect();
+
+        let cells: Vec<serde_json::Value> = st
+            .definition
+            .cells
+            .iter()
+            .map(|c| {
+                let p = by_id.get(c.id.as_str());
+                serde_json::json!({
+                    "cell_id": c.id,
+                    "name": c.name,
+                    "x": p.map(|p| p.x),
+                    "y": p.map(|p| p.y),
+                })
+            })
+            .collect();
+
+        let edges: Vec<serde_json::Value> = st
+            .definition
+            .edges
+            .iter()
+            .map(|e| serde_json::json!({ "from": e.from, "to": e.to, "label": e.label }))
+            .collect();
+
+        let payload = serde_json::json!({
+            "harness_id": args.harness_id,
+            "cells": cells,
+            "edges": edges,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Overwrite the display positions of specific cells.
+    #[tool(
+        description = "Set the display position of specific cells: { harness_id, \
+        positions:[{cell_id, x, y}] }. x/y are CENTER coordinates. Cells not listed keep \
+        their current position. This does NOT create a new board version and does not take \
+        the optimistic lock — layout is display-only data. Errors if any cell_id is absent \
+        from the harness's current board version."
+    )]
+    async fn sugo_set_layout(
+        &self,
+        Parameters(args): Parameters<tools::SetLayoutArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::domain::cell_position::CellPosition;
+        use sugo_core::ports::cell_position_repository::CellPositionRepository;
+        use sugo_core::usecase::get_status::get_status;
+
+        let st = get_status(self.repo.as_ref(), &args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+        let known: std::collections::HashSet<&str> =
+            st.definition.cells.iter().map(|c| c.id.as_str()).collect();
+
+        // 盤面に無いセルの座標を書くと、GUI 側の全置換保存で黙って消える上に
+        // 呼び出し側は成功したと誤解する。先に弾く。
+        for p in &args.positions {
+            if !known.contains(p.cell_id.as_str()) {
+                return Err(error::to_tool_error(
+                    sugo_core::error::CoreError::NotFound(p.cell_id.clone()),
+                ));
+            }
+        }
+
+        let mapped: Vec<CellPosition> = args
+            .positions
+            .iter()
+            .map(|p| CellPosition { cell_id: p.cell_id.clone(), x: p.x, y: p.y })
+            .collect();
+        self.pos_repo
+            .upsert(&args.harness_id, &mapped)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({
+            "harness_id": args.harness_id,
+            "updated": mapped.len(),
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            payload.to_string(),
+        )]))
+    }
+
+    /// Discard a harness's saved layout so the GUI re-computes it.
+    #[tool(
+        description = "Clear a harness's saved cell positions. The GUI re-computes a fresh \
+        serpentine layout for every cell on its next render. Use this when the layout is a \
+        mess and a clean rebuild is wanted; any manual positioning is lost. Returns \
+        { harness_id, cleared: true }."
+    )]
+    async fn sugo_relayout(
+        &self,
+        Parameters(args): Parameters<tools::RelayoutArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use sugo_core::ports::cell_position_repository::CellPositionRepository;
+        use sugo_core::usecase::get_status::get_status;
+
+        // 存在しないハーネス id を黙って成功させないよう、先に引く。
+        get_status(self.repo.as_ref(), &args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        self.pos_repo
+            .clear(&args.harness_id)
+            .await
+            .map_err(error::to_tool_error)?;
+
+        let payload = serde_json::json!({
+            "harness_id": args.harness_id,
+            "cleared": true,
         });
         Ok(CallToolResult::success(vec![Content::text(
             payload.to_string(),
@@ -1042,7 +1189,8 @@ impl ServerHandler for SugoServer {
             "Sugo harness MCP server. Tools: sugo_create_harness, sugo_status, \
              sugo_edit_cell, sugo_validate_harness, sugo_start, sugo_advance, sugo_stop_run, \
              sugo_update_harness, sugo_delete_harness, sugo_list_folders, sugo_create_folder, \
-             sugo_rename_folder, sugo_delete_folder, sugo_move_harness. \
+             sugo_rename_folder, sugo_delete_folder, sugo_move_harness, sugo_get_layout, \
+             sugo_set_layout, sugo_relayout. \
              Editing a cell always produces a new immutable board version guarded by an optimistic lock. \
              sugo_start begins a run and injects the first cell's prompt into the Nipper message queue; \
              sugo_advance follows an edge and injects the next cell's prompt into Nipper. \
@@ -1050,7 +1198,9 @@ impl ServerHandler for SugoServer {
              IMPORTANT: sugo_start and sugo_advance return NO prompt or edges in their MCP response. \
              The prompt, available edges, and run_id arrive exclusively as the next Nipper-injected \
              message. Claude must wait for that message before acting — never process harness content \
-             in the same turn as a sugo_start/sugo_advance call."
+             in the same turn as a sugo_start/sugo_advance call. \
+             Cell display positions live outside the board definition: sugo_get_layout / \
+             sugo_set_layout / sugo_relayout never create a board version."
                 .to_string(),
         );
         info
@@ -1071,6 +1221,12 @@ async fn main() -> anyhow::Result<()> {
     let run_conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| anyhow::anyhow!("open run_repo DB: {e}"))?;
     let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(run_conn)));
+
+    // 座標用にもう1本コネクションを開く。run_repo と同様、スキーマ適用は
+    // SqliteHarnessRepository::open が済ませている。
+    let pos_conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| anyhow::anyhow!("open pos_repo DB: {e}"))?;
+    let pos_repo = Arc::new(SqliteCellPositionRepository::new(std::sync::Mutex::new(pos_conn)));
 
     let nipper_base = nipper_client::NIPPER_BASE_URL.to_string();
     let token_dir_name = if cfg!(debug_assertions) {
@@ -1097,6 +1253,7 @@ async fn main() -> anyhow::Result<()> {
     let server = SugoServer::new(
         harness_repo,
         run_repo,
+        pos_repo,
         callback_url,
         nipper_base,
         token_path,
@@ -1118,19 +1275,38 @@ mod tests {
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
 
-    /// Build a server backed by a fresh in-memory database.
+    /// Build a server backed by a fresh database.
+    ///
+    /// `run_repo`'s `runs.harness_id` has no FK, so its own private
+    /// in-memory connection (as before) is fine. `cell_positions.harness_id`
+    /// *does* have `REFERENCES harnesses(id)`, and this build's bundled
+    /// SQLite enforces foreign keys by default — so `pos_repo` must share
+    /// the same on-disk database as `harness_repo` (a private `:memory:`
+    /// connection is invisible to any other connection), exactly like
+    /// production, where both open the same `SUGO_DB` file. A uniquely
+    /// named file under the OS temp dir stands in for that shared file.
     fn server() -> SugoServer {
-        let harness_repo = Arc::new(SqliteHarnessRepository::in_memory().expect("in-memory db"));
+        let db_path = std::env::temp_dir().join(format!("sugo-test-db-{}.sqlite", uuid::Uuid::new_v4()));
+        let db_path = db_path.to_string_lossy().into_owned();
+        let harness_repo = Arc::new(SqliteHarnessRepository::open(&db_path).expect("open db"));
+
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory conn");
         conn.execute_batch(sugo_infra::sqlite::schema::SCHEMA)
             .expect("schema");
         let run_repo = Arc::new(SqliteRunRepository::new(std::sync::Mutex::new(conn)));
+
+        let pos_conn = rusqlite::Connection::open(&db_path).expect("open pos db");
+        let pos_repo = Arc::new(SqliteCellPositionRepository::new(std::sync::Mutex::new(
+            pos_conn,
+        )));
+
         let token_path =
             std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
         std::fs::write(&token_path, "test-token").expect("write temp token");
         SugoServer::new(
             harness_repo,
             run_repo,
+            pos_repo,
             "http://127.0.0.1:1".to_string(),
             "http://127.0.0.1:1".to_string(),
             token_path.to_string_lossy().into_owned(),
@@ -2692,5 +2868,101 @@ mod tests {
             .unwrap();
         assert_eq!(entry["folder_id"], serde_json::json!(folder_id));
         assert_eq!(entry["folder_name"], serde_json::json!("開発"));
+    }
+
+    /// Build a server with one harness whose only cell is `valid_board()`'s
+    /// `c1`, returning the server and the harness id.
+    async fn server_with_one_cell_harness() -> (SugoServer, String) {
+        let srv = server();
+        let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
+        (srv, harness_id)
+    }
+
+    #[tokio::test]
+    async fn set_layout_rejects_a_cell_absent_from_the_board() {
+        let (server, harness_id) = server_with_one_cell_harness().await;
+
+        let err = server
+            .sugo_set_layout(Parameters(tools::SetLayoutArgs {
+                harness_id: harness_id.clone(),
+                positions: vec![tools::PositionArg {
+                    cell_id: "nope".into(),
+                    x: 0.0,
+                    y: 0.0,
+                }],
+            }))
+            .await
+            .expect_err("unknown cell must be rejected");
+        assert!(format!("{err:?}").contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn set_layout_then_get_layout_round_trips() {
+        let (server, harness_id) = server_with_one_cell_harness().await;
+
+        server
+            .sugo_set_layout(Parameters(tools::SetLayoutArgs {
+                harness_id: harness_id.clone(),
+                positions: vec![tools::PositionArg {
+                    cell_id: "c1".into(),
+                    x: 12.0,
+                    y: 34.0,
+                }],
+            }))
+            .await
+            .expect("set ok");
+
+        let res = server
+            .sugo_get_layout(Parameters(tools::GetLayoutArgs {
+                harness_id: harness_id.clone(),
+            }))
+            .await
+            .expect("get ok");
+        let v = payload(&res);
+        assert_eq!(v["cells"][0]["cell_id"], "c1");
+        assert_eq!(v["cells"][0]["x"], 12.0);
+        assert_eq!(v["cells"][0]["y"], 34.0);
+    }
+
+    #[tokio::test]
+    async fn relayout_clears_saved_positions() {
+        let (server, harness_id) = server_with_one_cell_harness().await;
+
+        server
+            .sugo_set_layout(Parameters(tools::SetLayoutArgs {
+                harness_id: harness_id.clone(),
+                positions: vec![tools::PositionArg {
+                    cell_id: "c1".into(),
+                    x: 12.0,
+                    y: 34.0,
+                }],
+            }))
+            .await
+            .expect("set ok");
+        server
+            .sugo_relayout(Parameters(tools::RelayoutArgs {
+                harness_id: harness_id.clone(),
+            }))
+            .await
+            .expect("relayout ok");
+
+        let res = server
+            .sugo_get_layout(Parameters(tools::GetLayoutArgs { harness_id }))
+            .await
+            .expect("get ok");
+        let v = payload(&res);
+        assert!(v["cells"][0]["x"].is_null());
+    }
+
+    #[tokio::test]
+    async fn relayout_missing_harness_is_not_found() {
+        let srv = server();
+        let err = srv
+            .sugo_relayout(Parameters(tools::RelayoutArgs {
+                harness_id: "no-such-harness".into(),
+            }))
+            .await
+            .expect_err("missing harness must be rejected");
+        assert_eq!(error_code(&err), "not_found");
     }
 }
