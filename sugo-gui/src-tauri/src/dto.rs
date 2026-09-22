@@ -126,3 +126,11 @@ pub struct TrashItemDto {
     pub deleted_at: String,
     pub remaining_days: i64,
 }
+
+/// セルの表示座標。x/y はセル中心の座標。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CellPositionDto {
+    pub cell_id: String,
+    pub x: f64,
+    pub y: f64,
+}

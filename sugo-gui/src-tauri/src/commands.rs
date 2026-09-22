@@ -1,15 +1,17 @@
 use crate::dto::{
-    ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CreateHarnessResultDto,
-    DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto, DraftCellDto, EdgeDto,
-    FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto, StopRunResultDto,
-    TrashItemDto, UpdateEdgeResultDto,
+    ActiveRunDto, AddCellResultDto, AddEdgeResultDto, CellDto, CellPositionDto,
+    CreateHarnessResultDto, DeleteCellResultDto, DeleteEdgeResultDto, DeleteFolderResultDto,
+    DraftCellDto, EdgeDto, FolderDto, HarnessDetailDto, HarnessSummaryDto, RenameCellResultDto,
+    StopRunResultDto, TrashItemDto, UpdateEdgeResultDto,
 };
 use crate::state::AppState;
 use sugo_core::domain::cell::{Cell, CellStatus};
+use sugo_core::domain::cell_position::CellPosition;
 use sugo_core::domain::edge::{Edge, Guard};
 use sugo_core::domain::harness::{BoardVersion, Harness};
 use sugo_core::domain::run::RunStatus;
 use sugo_core::error::CoreError;
+use sugo_core::ports::cell_position_repository::CellPositionRepository;
 use sugo_core::ports::id_clock::IdClock;
 use sugo_core::ports::repository::HarnessRepository;
 use sugo_core::ports::run_repository::RunRepository;
@@ -1049,15 +1051,78 @@ pub async fn list_trash(state: State<'_, AppState>) -> Result<Vec<TrashItemDto>,
         .collect())
 }
 
+/// ハーネスのセル表示座標を取得する。未登録なら空配列。
+#[tauri::command]
+pub async fn get_cell_positions(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<Vec<CellPositionDto>, String> {
+    get_cell_positions_inner(state.pos_repo.as_ref(), harness_id).await
+}
+
+async fn get_cell_positions_inner(
+    repo: &dyn CellPositionRepository,
+    harness_id: String,
+) -> Result<Vec<CellPositionDto>, String> {
+    let positions = repo.list(&harness_id).await.map_err(map_core_error)?;
+    Ok(positions
+        .into_iter()
+        .map(|p| CellPositionDto { cell_id: p.cell_id, x: p.x, y: p.y })
+        .collect())
+}
+
+/// ハーネスのセル表示座標を全置換する。
+///
+/// 盤面から消えたセルの座標が残留しないよう、削除と挿入を単一トランザクション
+/// で行う `replace_all` を使う（`upsert` ではない）。
+#[tauri::command]
+pub async fn save_cell_positions(
+    state: State<'_, AppState>,
+    harness_id: String,
+    positions: Vec<CellPositionDto>,
+) -> Result<(), String> {
+    save_cell_positions_inner(state.pos_repo.as_ref(), harness_id, positions).await
+}
+
+async fn save_cell_positions_inner(
+    repo: &dyn CellPositionRepository,
+    harness_id: String,
+    positions: Vec<CellPositionDto>,
+) -> Result<(), String> {
+    let mapped: Vec<CellPosition> = positions
+        .into_iter()
+        .map(|p| CellPosition { cell_id: p.cell_id, x: p.x, y: p.y })
+        .collect();
+    repo.replace_all(&harness_id, &mapped).await.map_err(map_core_error)
+}
+
+/// ハーネスのセル表示座標を全削除する。次の描画で自動レイアウトが走る。
+#[tauri::command]
+pub async fn clear_cell_positions(
+    state: State<'_, AppState>,
+    harness_id: String,
+) -> Result<(), String> {
+    clear_cell_positions_inner(state.pos_repo.as_ref(), harness_id).await
+}
+
+async fn clear_cell_positions_inner(
+    repo: &dyn CellPositionRepository,
+    harness_id: String,
+) -> Result<(), String> {
+    repo.clear(&harness_id).await.map_err(map_core_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        add_cell_inner, add_edge_inner, create_folder_inner, create_harness_inner,
-        delete_cell_inner, delete_edge_inner, delete_folder_inner, list_folders_inner,
-        list_harnesses_inner, move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner,
-        rename_folder_inner, rename_harness_inner, restore_harness_inner, set_cell_memo_inner,
-        stop_run_inner, trash_harness_inner, update_edge_inner,
+        add_cell_inner, add_edge_inner, clear_cell_positions_inner, create_folder_inner,
+        create_harness_inner, delete_cell_inner, delete_edge_inner, delete_folder_inner,
+        get_cell_positions_inner, list_folders_inner, list_harnesses_inner,
+        move_harness_to_folder_inner, purge_harness_inner, rename_cell_inner, rename_folder_inner,
+        rename_harness_inner, restore_harness_inner, save_cell_positions_inner,
+        set_cell_memo_inner, stop_run_inner, trash_harness_inner, update_edge_inner,
     };
+    use crate::dto::CellPositionDto;
     use std::sync::Arc;
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
@@ -2471,5 +2536,42 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("not found"), "actual: {err}");
+    }
+
+    // ── cell_positions（コマンド本体 *_inner を直接実行）───────────────────
+
+    #[tokio::test]
+    async fn cell_positions_round_trip_through_inner_fns() {
+        use std::sync::Mutex;
+        use sugo_infra::sqlite::SqliteCellPositionRepository;
+        use sugo_infra::sqlite::schema::SCHEMA;
+
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(SCHEMA).expect("schema applied");
+        conn.execute(
+            "INSERT INTO harnesses \
+             (id, name, description, folder_id, current_version, has_draft, lock_version, created_at, updated_at) \
+             VALUES ('h1', 'h1', NULL, NULL, 1, 0, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed harness");
+        let pos_repo = SqliteCellPositionRepository::new(Mutex::new(conn));
+
+        save_cell_positions_inner(
+            &pos_repo,
+            "h1".into(),
+            vec![CellPositionDto { cell_id: "c1".into(), x: 3.0, y: 4.0 }],
+        )
+        .await
+        .expect("save ok");
+
+        let got = get_cell_positions_inner(&pos_repo, "h1".into()).await.expect("get ok");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].cell_id, "c1");
+        assert_eq!(got[0].x, 3.0);
+        assert_eq!(got[0].y, 4.0);
+
+        clear_cell_positions_inner(&pos_repo, "h1".into()).await.expect("clear ok");
+        assert!(get_cell_positions_inner(&pos_repo, "h1".into()).await.expect("get ok").is_empty());
     }
 }
