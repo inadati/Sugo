@@ -60,6 +60,11 @@ import cytoscapeDagre from "cytoscape-dagre";
 // @ts-expect-error cytoscape-edgehandles は型を同梱せず、JS 実体が ambient 宣言より優先されるため
 import edgehandles from "cytoscape-edgehandles";
 import NodeNameEditor from "./NodeNameEditor.vue";
+import {
+  loadPositions,
+  savePositions as persistPositions,
+  type PositionMap,
+} from "../lib/positions";
 
 cytoscape.use(cytoscapeDagre as cytoscape.Ext);
 cytoscape.use(edgehandles as cytoscape.Ext);
@@ -87,8 +92,6 @@ interface RenderedMarker {
   x: number;
   y: number;
 }
-
-type PositionMap = Record<string, { x: number; y: number }>;
 
 const props = defineProps<{
   harnessId: string;
@@ -120,53 +123,21 @@ const handle = ref<{ x: number; y: number; nodeId: string } | null>(null);
 const nodeEditor = ref<{ cellId: string; name: string; x: number; y: number; width: number } | null>(null);
 
 // ── レイアウト永続化 ──────────────────────────────────────────────────
-
-function lsKey() {
-  return `sugo:layout:${props.harnessId}`;
-}
-
-function savePositions() {
-  if (!cy) return;
-  const pos: PositionMap = {};
-  cy.nodes().forEach((n) => { pos[n.id()] = { ...n.position() }; });
-  localStorage.setItem(lsKey(), JSON.stringify(pos));
-}
-
-// 過去のバグ等でlocalStorageに異常な座標（NaN・非有限値・極端に大きい値）が
-// 保存されていると、cy.fit()がそれを含めようとして異常にズームアウトし、
-// 離れた場所にある他のノードが実質見えなくなる（#はみ出し対応時に発覚）。
-// そのノードだけ「未保存」扱いにして自動配置に回すことで自己修復する。
-const MAX_SANE_COORD = 20000;
-
-function isSaneCoord(p: unknown): p is { x: number; y: number } {
-  if (!p || typeof p !== "object") return false;
-  const { x, y } = p as { x?: unknown; y?: unknown };
-  return (
-    typeof x === "number" && Number.isFinite(x) && Math.abs(x) <= MAX_SANE_COORD &&
-    typeof y === "number" && Number.isFinite(y) && Math.abs(y) <= MAX_SANE_COORD
-  );
-}
-
-function loadPositions(): PositionMap | null {
-  try {
-    const raw = localStorage.getItem(lsKey());
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PositionMap;
-    const sanitized: PositionMap = {};
-    for (const [id, p] of Object.entries(parsed)) {
-      if (isSaneCoord(p)) sanitized[id] = p;
-    }
-    return sanitized;
-  } catch {
-    return null;
-  }
-}
+// 座標の読み書き本体は ../lib/positions（Tauri コマンド経由で SQLite に保存）に
+// 切り出している。ここでは cytoscape のノード集合との橋渡しのみ行う。
 
 function applyPositions(positions: PositionMap) {
   cy?.nodes().forEach((n) => {
     const p = positions[n.id()];
     if (p) n.position(p);
   });
+}
+
+async function saveCurrentPositions() {
+  if (!cy) return;
+  const pos: PositionMap = {};
+  cy.nodes().forEach((n) => { pos[n.id()] = { ...n.position() }; });
+  await persistPositions(props.harnessId, pos);
 }
 
 // ── グラフ要素構築 ────────────────────────────────────────────────────
@@ -427,19 +398,22 @@ function fitView() {
   alignLeft(FIT_PADDING);
 }
 
-function placeNodes() {
+async function placeNodes() {
   if (!cy) return;
-  const saved = loadPositions();
-  const missingIds = props.cells
-    .filter((c) => !saved?.[c.id])
-    .map((c) => c.id);
+  const saved = await loadPositions(props.harnessId);
+  // placeNodes は await をまたぐため、その間に別のハーネスへ遷移して
+  // cy が破棄されている可能性がある。再確認する。
+  if (!cy) return;
 
-  if (saved && missingIds.length < props.cells.length) {
+  const missingIds = props.cells.filter((c) => saved[c.id] == null).map((c) => c.id);
+  const hasAnySaved = Object.keys(saved).length > 0;
+
+  if (hasAnySaved && missingIds.length < props.cells.length) {
     // 既存の手動配置がある: それを保持し、未配置ノードのみ追加配置する
     applyPositions(saved);
     if (missingIds.length > 0) {
       placeNewNodes(saved, missingIds);
-      savePositions();
+      await saveCurrentPositions();
     }
     fitView();
     computeMarkerPositions();
@@ -447,7 +421,7 @@ function placeNodes() {
     // 保存が全く無い（初回）→ dagre で自動レイアウト
     const layout = cy.layout(DAGRE_OPTIONS);
     layout.one("layoutstop", () => {
-      savePositions();
+      void saveCurrentPositions();
       fitView();
       computeMarkerPositions();
     });
@@ -500,7 +474,7 @@ function initCy() {
   });
 
   cy.on("dragfree", "node", () => {
-    savePositions();
+    void saveCurrentPositions();
     computeMarkerPositions();
   });
   // パン・ズーム・ドラッグ中は接続ハンドル・改名入力を退避（古い座標に残さない）
@@ -535,7 +509,7 @@ function initCy() {
   // その状態で fit すると古い（小さい）コンテナサイズを基準に計算されて
   // 一部のノードが実際の表示領域外に配置されることがあった。
   // requestAnimationFrame で最低1回描画を経てからレイアウトを確定させる。
-  requestAnimationFrame(() => placeNodes());
+  requestAnimationFrame(() => void placeNodes());
 }
 
 /// cytoscape のレンダリング座標（コンテナ相対）を画面座標へ変換する。
@@ -606,7 +580,7 @@ function refresh() {
   selected.value = null;
   cy.elements().remove();
   cy.add(buildElements());
-  placeNodes();
+  void placeNodes();
 }
 
 function onResize() {

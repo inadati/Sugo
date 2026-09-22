@@ -1,8 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import cytoscape from "cytoscape";
 import BoardGraph from "./BoardGraph.vue";
 import NodeNameEditor from "./NodeNameEditor.vue";
+
+vi.mock("../lib/positions", () => ({
+  loadPositions: vi.fn(async () => ({})),
+  savePositions: vi.fn(async () => {}),
+  clearPositions: vi.fn(async () => {}),
+}));
 
 // cytoscape をモックし、登録された on ハンドラを記録して後からトリガできるようにする。
 vi.mock("cytoscape", () => {
