@@ -5,6 +5,7 @@
 //! and [`repository::HarnessRepository`] is the persistence port implemented by
 //! infrastructure adapters (e.g. SQLite) and by in-memory fakes in tests.
 
+pub mod cell_position_repository;
 pub mod id_clock;
 pub mod repository;
 pub mod run_repository;

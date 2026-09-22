@@ -6,10 +6,12 @@
 //! file-backed database or [`SqliteHarnessRepository::in_memory`] for an
 //! ephemeral one (handy in tests).
 
+pub mod cell_position_repository;
 pub mod repository;
 pub mod run_repository;
 pub mod schema;
 /// SQLite-backed implementation of the harness repository port. See its
 /// `open` and `in_memory` constructors to obtain an instance.
+pub use cell_position_repository::SqliteCellPositionRepository;
 pub use repository::SqliteHarnessRepository;
 pub use run_repository::SqliteRunRepository;

@@ -6,12 +6,15 @@
 
 /// DDL applied at repository initialization.
 ///
-/// Creates the P1 tables (`harnesses`, `board_versions`) and the P2 `runs`
-/// table.  The `board_versions.harness_id` foreign key is enforced only when
-/// the connection has `PRAGMA foreign_keys = ON`, which the repository sets on
-/// open; see [`crate::sqlite::SqliteHarnessRepository`]. The
+/// Creates the P1 tables (`harnesses`, `board_versions`), the P2 `runs`
+/// table, and the `cell_positions` table.  The `board_versions.harness_id`
+/// foreign key is enforced only when the connection has
+/// `PRAGMA foreign_keys = ON`, which the repository sets on open; see
+/// [`crate::sqlite::SqliteHarnessRepository`]. The
 /// `UNIQUE(harness_id, version_no)` constraint guarantees board-version
 /// immutability by rejecting silent overwrites of an existing version number.
+/// `cell_positions` holds display-only coordinates, not board semantics, so
+/// it is kept out of `board_versions.definition_json`.
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS folders (
   id         TEXT PRIMARY KEY,
@@ -53,5 +56,12 @@ CREATE TABLE IF NOT EXISTS runs (
   last_heartbeat_at TEXT,
   inject_pending_since TEXT,
   current_step_token TEXT
+);
+CREATE TABLE IF NOT EXISTS cell_positions (
+  harness_id TEXT NOT NULL REFERENCES harnesses(id),
+  cell_id    TEXT NOT NULL,
+  x          REAL NOT NULL,
+  y          REAL NOT NULL,
+  PRIMARY KEY (harness_id, cell_id)
 );
 "#;
