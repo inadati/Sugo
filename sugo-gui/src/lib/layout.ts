@@ -41,13 +41,12 @@ async function runElk(nodes: LayoutNode[], edges: LayoutEdge[]): Promise<PlacedN
     children: nodes.map((n) => ({ id: n.id, width: n.width, height: n.height })),
     edges: edges.map((e, i) => ({ id: `e${i}`, sources: [e.from], targets: [e.to] })),
   });
-  return (graph.children ?? []).map((c) => ({
-    id: c.id,
-    x: c.x ?? 0,
-    y: c.y ?? 0,
-    width: c.width ?? 0,
-    height: c.height ?? 0,
-  }));
+  return (graph.children ?? []).map((c) => {
+    if (c.x == null || c.y == null || c.width == null || c.height == null) {
+      throw new Error(`ELK returned a child without full coordinates: ${c.id}`);
+    }
+    return { id: c.id, x: c.x, y: c.y, width: c.width, height: c.height };
+  });
 }
 
 /**
@@ -55,6 +54,10 @@ async function runElk(nodes: LayoutNode[], edges: LayoutEdge[]): Promise<PlacedN
  *
  * direction=RIGHT の layered 出力では同一層のノードが同一の x に揃うため、
  * x が層の識別子として使える。
+ *
+ * この判定は ELK が層を左揃えで出力すること、かつ Sugo の全セルが幅固定
+ * （150px、BoardGraph.vue の STYLES で設定）であることに依存している。
+ * 将来セル幅を可変にする場合はこの関数の前提が崩れるので注意すること。
  */
 export function groupIntoLayers(placed: PlacedNode[]): PlacedNode[][] {
   const byX = new Map<number, PlacedNode[]>();
