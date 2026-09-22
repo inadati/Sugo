@@ -28,6 +28,7 @@ Sugo（スーゴ）は、AIハーネスを「双六盤を組み立てるよう�
 - **SQLite DB を持つ**。`.sugo/` 共有ファイルは持たず、調整情報はすべて DB に集約。DB が排他の権威
 - **盤面定義は不変 JSON**（`board_versions`）、**実行状態/レジストリ/イベント/outbox は正規化テーブル**（ハイブリッド）
 - run は board_version にピン留め
+- **セルの表示座標は `cell_positions` テーブル**に持つ。盤面定義（`board_versions`）には入れない。座標を変えても board version は上がらない
 
 ## MCP / スキル方針
 
