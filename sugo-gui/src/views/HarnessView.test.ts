@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { h } from "vue";
 import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import HarnessView from "./HarnessView.vue";
@@ -18,8 +19,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(mockDetail),
 }));
 
+const relayoutAllMock = vi.fn(async () => {});
 vi.mock("../components/BoardGraph.vue", () => ({
-  default: { name: "BoardGraph", emits: ["select", "edge-edit"], template: "<div/>" },
+  default: {
+    name: "BoardGraph",
+    emits: ["select", "edge-edit", "edge-delete", "node-delete", "node-rename", "connect"],
+    setup(_props: unknown, { expose }: { expose: (e: Record<string, unknown>) => void }) {
+      expose({ relayoutAll: relayoutAllMock });
+      return () => h("div");
+    },
+  },
 }));
 vi.mock("../components/AddCellDialog.vue", () => ({ default: { name: "AddCellDialog", template: "<div/>" } }));
 vi.mock("../components/CellDetailPanel.vue", () => ({
@@ -196,6 +205,18 @@ describe("HarnessView", () => {
 
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockResolvedValue(mockDetail);
+  });
+
+  it("整列ボタンを押すと BoardGraph の relayoutAll を呼ぶ", async () => {
+    relayoutAllMock.mockClear();
+    const router = makeRouter();
+    const wrapper = mount(HarnessView, { props: { id: "h1" }, global: { plugins: [router] } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await wrapper.find('[data-testid="relayout"]').trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(relayoutAllMock).toHaveBeenCalled();
   });
 
   it("reloads detail when polled current_version changes", async () => {

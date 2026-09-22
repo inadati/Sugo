@@ -6,10 +6,17 @@
         <h2 class="text-xl font-semibold">{{ detail.name }}</h2>
         <p class="text-sm text-gray-400">v{{ detail.current_version }}</p>
       </div>
-      <button
-        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-        @click="showAddCell = true"
-      >+ マスを追加</button>
+      <div class="flex items-center gap-2">
+        <button
+          data-testid="relayout"
+          class="bg-gray-100 text-gray-700 px-4 py-2 rounded hover:bg-gray-200"
+          @click="onRelayout"
+        >整列</button>
+        <button
+          class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          @click="showAddCell = true"
+        >+ マスを追加</button>
+      </div>
     </div>
 
     <!-- 実行中ラン: 袋小路に入ったランをここから終わらせる -->
@@ -48,6 +55,7 @@
 
     <!-- 盤面グラフ -->
     <BoardGraph
+      ref="boardGraph"
       class="flex-1 min-h-0"
       :harness-id="detail.harness_id"
       :cells="detail.cells"
@@ -193,6 +201,12 @@ const activeRuns = ref<ActiveRun[]>([]);
 const stopTarget = ref<ActiveRun | null>(null);
 const edgeEditor = ref<EdgeEditorState | null>(null);
 const { toast, showToast } = useToast();
+const boardGraph = ref<{ relayoutAll: () => Promise<void> } | null>(null);
+
+/** 盤面を蛇行レイアウトで組み直す。手で動かした配置は失われる。 */
+async function onRelayout() {
+  await boardGraph.value?.relayoutAll();
+}
 
 const selectedCell = computed<Cell | null>(
   () => detail.value?.cells.find((c) => c.id === selectedCellId.value) ?? null
