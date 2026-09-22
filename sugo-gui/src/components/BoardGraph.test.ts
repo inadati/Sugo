@@ -3,11 +3,20 @@ import { mount, flushPromises } from "@vue/test-utils";
 import cytoscape from "cytoscape";
 import BoardGraph from "./BoardGraph.vue";
 import NodeNameEditor from "./NodeNameEditor.vue";
+import { loadPositions } from "../lib/positions";
 
 vi.mock("../lib/positions", () => ({
   loadPositions: vi.fn(async () => ({})),
   savePositions: vi.fn(async () => {}),
   clearPositions: vi.fn(async () => {}),
+}));
+
+const computeLayoutMock = vi.fn(async (..._a: unknown[]) => ({
+  c1: { x: 10, y: 20 },
+  c2: { x: 30, y: 20 },
+}));
+vi.mock("../lib/layout", () => ({
+  computeLayout: (...a: unknown[]) => computeLayoutMock(...a),
 }));
 
 // cytoscape をモックし、登録された on ハンドラを記録して後からトリガできるようにする。
@@ -25,9 +34,22 @@ vi.mock("cytoscape", () => {
     removeClass: vi.fn(),
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const fn: any = vi.fn(() => {
+  const fn: any = vi.fn((options: any) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handlers: { ev: string; sel: string | undefined; cb: (...a: any[]) => void }[] = [];
+    // ノードの id ごとに同じモックオブジェクトを返すキャッシュ。
+    // これにより「コンポーネント内部で position() が呼ばれた」ことを、
+    // テスト側から改めて getElementById(id).position で検証できる。
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nodeCache = new Map<string, ReturnType<typeof makeEl>>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const initialNodeIds: string[] = (options?.elements ?? [])
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .filter((el: any) => el.data?.id != null && el.data?.source == null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((el: any) => el.data.id as string);
+    for (const id of initialNodeIds) nodeCache.set(id, makeEl(id));
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cy: any = {
       _handlers: handlers,
@@ -42,8 +64,17 @@ vi.mock("cytoscape", () => {
       },
       elements: () => ({ remove: vi.fn(), boundingBox: () => ({ x1: 0, y1: 0, x2: 0, y2: 0 }) }),
       add: vi.fn(),
-      nodes: () => ({ forEach: vi.fn(), filter: () => ({ boundingBox: () => ({ x1: 0, y1: 0, x2: 0, y2: 0 }) }) }),
-      getElementById: (id: string) => makeEl(id),
+      nodes: () => ({
+        forEach: (cb: (n: ReturnType<typeof makeEl>) => void) => { nodeCache.forEach((n) => cb(n)); },
+        filter: (pred: (n: ReturnType<typeof makeEl>) => boolean) => {
+          const matched = [...nodeCache.values()].filter(pred);
+          return { length: matched.length, boundingBox: () => ({ x1: 0, y1: 0, x2: 0, y2: 0 }) };
+        },
+      }),
+      getElementById: (id: string) => {
+        if (!nodeCache.has(id)) nodeCache.set(id, makeEl(id));
+        return nodeCache.get(id);
+      },
       layout: () => ({ run: vi.fn(), one: vi.fn() }),
       edgehandles: () => cy.__eh,
       fit: vi.fn(),
@@ -63,7 +94,6 @@ vi.mock("cytoscape", () => {
   fn.use = vi.fn();
   return { default: fn };
 });
-vi.mock("cytoscape-dagre", () => ({ default: {} }));
 vi.mock("cytoscape-edgehandles", () => ({ default: {} }));
 
 const sampleCells = [
@@ -86,6 +116,13 @@ function lastCy(): any {
 function mountGraph(edges: EdgeInput[] = sampleEdges) {
   return mount(BoardGraph, {
     props: { harnessId: "h1", cells: sampleCells, edges, startCellId: "c1" },
+  });
+}
+
+// cells/edges を差し替えたいテスト（レイアウト系）向けのヘルパー。
+function mountBoardGraph(opts: { cells: CellData[]; edges: EdgeInput[] }) {
+  return mount(BoardGraph, {
+    props: { harnessId: "h1", cells: opts.cells, edges: opts.edges, startCellId: opts.cells[0]?.id ?? "" },
   });
 }
 
@@ -228,5 +265,60 @@ describe("BoardGraph", () => {
     expect(handle.exists()).toBe(true);
     await handle.trigger("mousedown");
     expect(cy.__eh.start).toHaveBeenCalled();
+  });
+
+  // ── 蛇行レイアウト（computeLayout）への接続 ─────────────────────────────
+  it("座標が未保存のとき computeLayout の結果を各ノードへ適用する", async () => {
+    mountBoardGraph({
+      cells: [
+        { id: "c1", name: "一", status: "active", terminal: false },
+        { id: "c2", name: "二", status: "active", terminal: true },
+      ],
+      edges: [{ from: "c1", to: "c2", label: "next", guard: null }],
+    });
+    await flushPromises();
+
+    expect(computeLayoutMock).toHaveBeenCalled();
+    const cy = lastCy();
+    expect(cy.getElementById("c1").position).toHaveBeenCalledWith({ x: 10, y: 20 });
+  });
+
+  it("computeLayout へ渡すノードに幅と高さが含まれる", async () => {
+    mountBoardGraph({
+      cells: [{ id: "c1", name: "一", status: "active", terminal: true }],
+      edges: [],
+    });
+    await flushPromises();
+
+    const [nodes] = computeLayoutMock.mock.calls[0] as unknown as [Array<{ id: string; width: number; height: number }>];
+    expect(nodes[0].id).toBe("c1");
+    expect(nodes[0].width).toBe(150);
+    expect(nodes[0].height).toBeGreaterThan(0);
+  });
+
+  it("既存の保存済み配置がある場合、既存セルの座標を保持し computeLayout は呼ばれない", async () => {
+    computeLayoutMock.mockClear();
+    (loadPositions as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      c1: { x: 1, y: 2 },
+      c2: { x: 3, y: 4 },
+    });
+
+    mountBoardGraph({
+      cells: [
+        { id: "c1", name: "一", status: "active", terminal: false },
+        { id: "c2", name: "二", status: "active", terminal: false },
+        { id: "c3", name: "三（新規）", status: "active", terminal: true },
+      ],
+      edges: [
+        { from: "c1", to: "c2", label: "next", guard: null },
+        { from: "c2", to: "c3", label: "next", guard: null },
+      ],
+    });
+    await flushPromises();
+
+    const cy = lastCy();
+    expect(cy.getElementById("c1").position).toHaveBeenCalledWith({ x: 1, y: 2 });
+    expect(cy.getElementById("c2").position).toHaveBeenCalledWith({ x: 3, y: 4 });
+    expect(computeLayoutMock).not.toHaveBeenCalled();
   });
 });

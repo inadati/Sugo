@@ -56,7 +56,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import cytoscape from "cytoscape";
-import cytoscapeDagre from "cytoscape-dagre";
 // @ts-expect-error cytoscape-edgehandles は型を同梱せず、JS 実体が ambient 宣言より優先されるため
 import edgehandles from "cytoscape-edgehandles";
 import NodeNameEditor from "./NodeNameEditor.vue";
@@ -65,8 +64,8 @@ import {
   savePositions as persistPositions,
   type PositionMap,
 } from "../lib/positions";
+import { computeLayout, type LayoutNode, type LayoutEdge } from "../lib/layout";
 
-cytoscape.use(cytoscapeDagre as cytoscape.Ext);
 cytoscape.use(edgehandles as cytoscape.Ext);
 
 interface CellData {
@@ -226,14 +225,20 @@ function buildElements(): cytoscape.ElementDefinition[] {
 
 // ── レイアウトとスタイル ──────────────────────────────────────────────
 
-const DAGRE_OPTIONS: cytoscape.LayoutOptions = {
-  name: "dagre",
-  // @ts-expect-error cytoscape-dagre options
-  rankDir: "LR",
-  nodeSep: 50,
-  rankSep: 140,
-  padding: 40,
-};
+// STYLES の node.width と同じ値。レイアウト計算はスタイルを読めないため
+// ここで明示する。片方を変えたらもう片方も変えること。
+const NODE_WIDTH = 150;
+
+/** computeLayout（蛇行レイアウト）へ渡す入力を現在の props から組み立てる。 */
+function buildLayoutInput(): { nodes: LayoutNode[]; edges: LayoutEdge[] } {
+  const nodes = props.cells.map((c) => ({
+    id: c.id,
+    width: NODE_WIDTH,
+    height: buildHeight(buildLabel(c)),
+  }));
+  const edges = props.edges.map((e) => ({ from: e.from, to: e.to }));
+  return { nodes, edges };
+}
 
 const STYLES: cytoscape.CytoscapeOptions["style"] = [
   {
@@ -341,7 +346,7 @@ function computeMarkerPositions() {
 /// 保存済み配置に無い新規ノードを、既存レイアウトを崩さずに配置する。
 ///
 /// 既存ノード群の外接矩形の「下」に、左詰めで横に並べて置く。これにより
-/// マス追加時に dagre 全再計算が走って既存配置が破壊される問題（#28）を防ぐ。
+/// マス追加時に自動レイアウトの全体再計算が走って既存配置が破壊される問題（#28）を防ぐ。
 function placeNewNodes(saved: PositionMap, missingIds: string[]) {
   if (!cy) return;
   const positioned = cy.nodes().filter((n) => saved[n.id()] != null);
@@ -398,6 +403,18 @@ function fitView() {
   alignLeft(FIT_PADDING);
 }
 
+/** 全体を蛇行レイアウトで組み直し、結果を保存する。Task 7 の「整列」ボタンからも呼ばれる。 */
+async function relayoutAll() {
+  if (!cy) return;
+  const { nodes, edges } = buildLayoutInput();
+  const positions = await computeLayout(nodes, edges);
+  if (!cy) return; // await をまたぐ間に破棄された可能性がある
+  applyPositions(positions);
+  await saveCurrentPositions();
+  fitView();
+  computeMarkerPositions();
+}
+
 async function placeNodes() {
   if (!cy) return;
   const saved = await loadPositions(props.harnessId);
@@ -418,14 +435,8 @@ async function placeNodes() {
     fitView();
     computeMarkerPositions();
   } else {
-    // 保存が全く無い（初回）→ dagre で自動レイアウト
-    const layout = cy.layout(DAGRE_OPTIONS);
-    layout.one("layoutstop", () => {
-      void saveCurrentPositions();
-      fitView();
-      computeMarkerPositions();
-    });
-    layout.run();
+    // 保存が全く無い（新規ハーネス）→ 蛇行レイアウトで全体を配置する
+    await relayoutAll();
   }
 }
 
@@ -607,5 +618,5 @@ onUnmounted(() => {
 watch(() => [props.cells, props.edges, props.startCellId], refresh, { deep: true });
 watch(() => props.activeRuns, computeMarkerPositions, { deep: true });
 
-defineExpose({ buildLabel, buildElements, fitView });
+defineExpose({ buildLabel, buildElements, fitView, relayoutAll });
 </script>
