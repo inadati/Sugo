@@ -3368,6 +3368,7 @@ dependencies = [
  "serde_json",
  "sugo-core",
  "sugo-infra",
+ "tempfile",
  "tokio",
  "uuid",
 ]

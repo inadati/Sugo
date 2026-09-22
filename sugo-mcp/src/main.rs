@@ -1275,6 +1275,23 @@ mod tests {
     use sugo_core::domain::board::BoardDefinition;
     use sugo_core::domain::cell::{Cell, CellStatus};
 
+    /// Owns the [`tempfile::TempDir`] backing a test [`SugoServer`]'s shared
+    /// database file alongside the server itself, so the directory (and the
+    /// `.sqlite` file in it) is deleted on drop instead of leaking into the
+    /// OS temp dir. `Deref`s to `SugoServer` so every existing
+    /// `server().sugo_xxx(...)` call site keeps compiling unchanged.
+    struct TestServer {
+        server: SugoServer,
+        _dir: tempfile::TempDir,
+    }
+
+    impl std::ops::Deref for TestServer {
+        type Target = SugoServer;
+        fn deref(&self) -> &SugoServer {
+            &self.server
+        }
+    }
+
     /// Build a server backed by a fresh database.
     ///
     /// `run_repo`'s `runs.harness_id` has no FK, so its own private
@@ -1283,10 +1300,12 @@ mod tests {
     /// SQLite enforces foreign keys by default — so `pos_repo` must share
     /// the same on-disk database as `harness_repo` (a private `:memory:`
     /// connection is invisible to any other connection), exactly like
-    /// production, where both open the same `SUGO_DB` file. A uniquely
-    /// named file under the OS temp dir stands in for that shared file.
-    fn server() -> SugoServer {
-        let db_path = std::env::temp_dir().join(format!("sugo-test-db-{}.sqlite", uuid::Uuid::new_v4()));
+    /// production, where both open the same `SUGO_DB` file. A `TempDir`
+    /// (dropped, and so deleted, with the returned `TestServer`) holds that
+    /// shared file so tests don't leak `.sqlite` files into the OS temp dir.
+    fn server() -> TestServer {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("sugo.sqlite");
         let db_path = db_path.to_string_lossy().into_owned();
         let harness_repo = Arc::new(SqliteHarnessRepository::open(&db_path).expect("open db"));
 
@@ -1303,14 +1322,15 @@ mod tests {
         let token_path =
             std::env::temp_dir().join(format!("sugo-test-token-{}", uuid::Uuid::new_v4()));
         std::fs::write(&token_path, "test-token").expect("write temp token");
-        SugoServer::new(
+        let server = SugoServer::new(
             harness_repo,
             run_repo,
             pos_repo,
             "http://127.0.0.1:1".to_string(),
             "http://127.0.0.1:1".to_string(),
             token_path.to_string_lossy().into_owned(),
-        )
+        );
+        TestServer { server, _dir: dir }
     }
 
     /// Extract the single text payload from a successful tool result as JSON.
@@ -2872,7 +2892,7 @@ mod tests {
 
     /// Build a server with one harness whose only cell is `valid_board()`'s
     /// `c1`, returning the server and the harness id.
-    async fn server_with_one_cell_harness() -> (SugoServer, String) {
+    async fn server_with_one_cell_harness() -> (TestServer, String) {
         let srv = server();
         let harness_id = create_harness(&srv, "h", Some(valid_board())).await;
         (srv, harness_id)
@@ -2964,5 +2984,75 @@ mod tests {
             .await
             .expect_err("missing harness must be rejected");
         assert_eq!(error_code(&err), "not_found");
+    }
+
+    /// `sugo_set_layout` must touch only the cells named in the call and
+    /// leave every other cell's saved position untouched — that's exactly
+    /// why it calls `upsert` rather than `replace_all` (see the module doc
+    /// on `CellPositionRepository`). A two-cell board is required to catch a
+    /// regression here: `server_with_one_cell_harness`'s single-cell board
+    /// can't distinguish `upsert` from `replace_all`, since there is no
+    /// "other cell" whose position a wrongful `replace_all` could wipe.
+    #[tokio::test]
+    async fn set_layout_only_touches_named_cells() {
+        let srv = server();
+        let two_cell = BoardDefinition {
+            schema_version: 1,
+            start: "c1".into(),
+            cells: vec![
+                Cell {
+                    id: "c1".into(),
+                    name: "first".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: false,
+                    request_memo: "".into(),
+                },
+                Cell {
+                    id: "c2".into(),
+                    name: "second".into(),
+                    prompt: "p".into(),
+                    status: CellStatus::Active,
+                    terminal: true,
+                    request_memo: "".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        let harness_id = create_harness(&srv, "h", Some(two_cell)).await;
+
+        // Seed both cells' positions.
+        srv.sugo_set_layout(Parameters(tools::SetLayoutArgs {
+            harness_id: harness_id.clone(),
+            positions: vec![
+                tools::PositionArg { cell_id: "c1".into(), x: 1.0, y: 2.0 },
+                tools::PositionArg { cell_id: "c2".into(), x: 100.0, y: 200.0 },
+            ],
+        }))
+        .await
+        .expect("seed both ok");
+
+        // Reposition only c1.
+        srv.sugo_set_layout(Parameters(tools::SetLayoutArgs {
+            harness_id: harness_id.clone(),
+            positions: vec![tools::PositionArg { cell_id: "c1".into(), x: 9.0, y: 8.0 }],
+        }))
+        .await
+        .expect("reposition c1 ok");
+
+        let res = srv
+            .sugo_get_layout(Parameters(tools::GetLayoutArgs { harness_id }))
+            .await
+            .expect("get ok");
+        let v = payload(&res);
+        let cells = v["cells"].as_array().expect("cells array");
+        let c1 = cells.iter().find(|c| c["cell_id"] == "c1").expect("c1 present");
+        let c2 = cells.iter().find(|c| c["cell_id"] == "c2").expect("c2 present");
+        assert_eq!(c1["x"], 9.0);
+        assert_eq!(c1["y"], 8.0);
+        // c2 was never named in the second call — a `replace_all` regression
+        // would have deleted it, leaving x/y null here.
+        assert_eq!(c2["x"], 100.0);
+        assert_eq!(c2["y"], 200.0);
     }
 }
