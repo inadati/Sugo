@@ -132,11 +132,15 @@ function applyPositions(positions: PositionMap) {
   });
 }
 
-async function saveCurrentPositions() {
+// hid: 呼び出し元が保持している「保存対象のハーネスID」。await をまたいで
+// props.harnessId が別ハーネスへ変わっている可能性があるため、都度 props を
+// 読み直さず呼び出し元が確認済みの値をそのまま使う（さもないと新しく開いた
+// ハーネスの座標を、直前のハーネスの内容で replace_all してしまう）。
+async function saveCurrentPositions(hid: string = props.harnessId) {
   if (!cy) return;
   const pos: PositionMap = {};
   cy.nodes().forEach((n) => { pos[n.id()] = { ...n.position() }; });
-  await persistPositions(props.harnessId, pos);
+  await persistPositions(hid, pos);
 }
 
 // ── グラフ要素構築 ────────────────────────────────────────────────────
@@ -403,40 +407,74 @@ function fitView() {
   alignLeft(FIT_PADDING);
 }
 
-/** 全体を蛇行レイアウトで組み直し、結果を保存する。Task 7 の「整列」ボタンからも呼ばれる。 */
+/** 全体を蛇行レイアウトで組み直し、結果を保存する。ツールバーの「整列」ボタンからも呼ばれる。 */
 async function relayoutAll() {
+  const hid = props.harnessId; // await をまたぐ間に props.harnessId が変わる可能性があるため固定する
   if (!cy) return;
-  const { nodes, edges } = buildLayoutInput();
-  const positions = await computeLayout(nodes, edges);
-  if (!cy) return; // await をまたぐ間に破棄された可能性がある
-  applyPositions(positions);
-  await saveCurrentPositions();
-  fitView();
-  computeMarkerPositions();
+  try {
+    const { nodes, edges } = buildLayoutInput();
+    const positions = await computeLayout(nodes, edges);
+    // cy が破棄された、または別ハーネスへ遷移した（props.harnessId が変わった）場合は中断する。
+    // 中断しないと、新しく開いたハーネスに古いハーネスの計算結果を保存してしまう。
+    if (!cy || props.harnessId !== hid) return;
+    applyPositions(positions);
+    await saveCurrentPositions(hid);
+    if (!cy || props.harnessId !== hid) return;
+    fitView();
+    computeMarkerPositions();
+  } catch (e) {
+    // ELK が座標を返せない等でレイアウト計算/保存が失敗すると、fitView() が
+    // 実行されずに全ノードが既定の (0,0) に重なったまま見えなくなる（隅の塊化）。
+    // 失敗時も必ず fitView() を呼んで使える表示に戻す。呼び出し元（整列ボタン）
+    // がエラーをユーザーに提示できるよう、ログを残したうえで再送出する。
+    console.error("[BoardGraph] relayoutAll failed", e);
+    fitView();
+    throw e;
+  }
 }
 
 async function placeNodes() {
+  const hid = props.harnessId; // await をまたぐ間に props.harnessId が変わる可能性があるため固定する
   if (!cy) return;
-  const saved = await loadPositions(props.harnessId);
-  // placeNodes は await をまたぐため、その間に別のハーネスへ遷移して
-  // cy が破棄されている可能性がある。再確認する。
-  if (!cy) return;
+  try {
+    const saved = await loadPositions(hid);
+    // placeNodes は await をまたぐため、その間に別のハーネスへ遷移して
+    // cy が破棄された、または props.harnessId が変わっている可能性がある。再確認する。
+    if (!cy || props.harnessId !== hid) return;
 
-  const missingIds = props.cells.filter((c) => saved[c.id] == null).map((c) => c.id);
-  const hasAnySaved = Object.keys(saved).length > 0;
+    const missingIds = props.cells.filter((c) => saved[c.id] == null).map((c) => c.id);
+    const hasAnySaved = Object.keys(saved).length > 0;
+    // 未配置セルが全体の半数を超える場合は「実質新規ハーネス」とみなし、
+    // 追加配置ではなく全体レイアウトへフォールバックする。
+    // 例: 30マスの新規ハーネス（座標なし）に対して sugo_set_layout で1件だけ
+    // 座標を書き込むと、GUI 側では「1個だけ配置済み・29個が新規」という
+    // 状態になる。閾値なしだとこの 29 個が placeNewNodes() の単純な横一列詰め
+    // （baseX + i*200）に落ち、この機能が解消したはずの「全セルが横一列に
+    // 並ぶ」不具合を、この branch が追加した MCP ツール経由で再現してしまう。
+    const isMostlyUnplaced = missingIds.length > props.cells.length / 2;
 
-  if (hasAnySaved && missingIds.length < props.cells.length) {
-    // 既存の手動配置がある: それを保持し、未配置ノードのみ追加配置する
-    applyPositions(saved);
-    if (missingIds.length > 0) {
-      placeNewNodes(saved, missingIds);
-      await saveCurrentPositions();
+    if (hasAnySaved && missingIds.length < props.cells.length && !isMostlyUnplaced) {
+      // 既存の手動配置がある: それを保持し、未配置ノードのみ追加配置する
+      applyPositions(saved);
+      if (missingIds.length > 0) {
+        placeNewNodes(saved, missingIds);
+        await saveCurrentPositions(hid);
+        if (!cy || props.harnessId !== hid) return;
+      }
+      fitView();
+      computeMarkerPositions();
+    } else {
+      // 保存が全く無い、または大半が未配置（新規ハーネス相当）
+      // → 蛇行レイアウトで全体を配置する
+      await relayoutAll();
     }
+  } catch (e) {
+    // loadPositions / computeLayout の失敗で fitView() が実行されないと、
+    // 全ノードが既定の (0,0) に重なって見えなくなる（隅の塊化）。一度ドラッグ
+    // すると saveCurrentPositions がその塊配置を保存し固定化してしまうため、
+    // 失敗時も必ず fitView() を呼んで使える表示に戻す。
+    console.error("[BoardGraph] placeNodes failed", e);
     fitView();
-    computeMarkerPositions();
-  } else {
-    // 保存が全く無い（新規ハーネス）→ 蛇行レイアウトで全体を配置する
-    await relayoutAll();
   }
 }
 

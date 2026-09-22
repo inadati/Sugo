@@ -112,7 +112,7 @@ ELK の `wrapping` 機能は使わない。ELK は出力に層の情報を含ま
 
 | ツール | 引数 | 役割 |
 |---|---|---|
-| `sugo_get_layout` | `harness_id` | 全セルの座標・寸法とエッジを返す。未配置セルは座標 `null` |
+| `sugo_get_layout` | `harness_id` | 全セルの座標とエッジを返す。未配置セルは座標 `null`（寸法は含まない。ノードの高さはラベルの折り返し行数に依存し、それを決めるのは GUI 側のテキスト計測であって Rust 側では計算できないため） |
 | `sugo_set_layout` | `harness_id`, `positions[]` | 指定セルの座標を上書きする |
 | `sugo_relayout` | `harness_id` | 該当ハーネスの座標を全削除する |
 

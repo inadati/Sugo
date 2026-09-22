@@ -39,6 +39,11 @@ export async function savePositions(harnessId: string, positions: PositionMap): 
   await invoke("save_cell_positions", { harnessId, positions: rows });
 }
 
+// 現時点でアプリ内から呼ぶ箇所はない（整列ボタンは relayoutAll() 経由で
+// 「再計算して保存」するため、座標を空にするだけのこの関数を使わない）。
+// sugo-mcp の sugo_relayout（座標を全削除して GUI 側の自動配置に委ねる）と
+// 対になる操作として存在させており、将来「配置をリセット」する UI 操作を
+// 追加する際に備えて残してある。
 export async function clearPositions(harnessId: string): Promise<void> {
   await invoke("clear_cell_positions", { harnessId });
 }

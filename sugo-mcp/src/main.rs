@@ -369,7 +369,11 @@ impl SugoServer {
         positions:[{cell_id, x, y}] }. x/y are CENTER coordinates. Cells not listed keep \
         their current position. This does NOT create a new board version and does not take \
         the optimistic lock — layout is display-only data. Errors if any cell_id is absent \
-        from the harness's current board version."
+        from the harness's current board version. If this harness is already open in the \
+        GUI, that view does NOT pick up the change automatically (the GUI only re-reads on \
+        board version changes, and this call never bumps the version) — the user must \
+        reopen the harness to see it. Dragging a node in a stale open view before reopening \
+        will overwrite this change."
     )]
     async fn sugo_set_layout(
         &self,
@@ -417,8 +421,12 @@ impl SugoServer {
     /// Discard a harness's saved layout so the GUI re-computes it.
     #[tool(
         description = "Clear a harness's saved cell positions. The GUI re-computes a fresh \
-        serpentine layout for every cell on its next render. Use this when the layout is a \
-        mess and a clean rebuild is wanted; any manual positioning is lost. Returns \
+        serpentine layout for every cell, but only once it re-opens this harness — if it is \
+        already open, that view does NOT pick this up automatically (the GUI only re-reads \
+        on board version changes, and this call never bumps the version), so the user must \
+        reopen the harness to see the effect. Dragging a node in a stale open view before \
+        reopening will overwrite this change. Use this when the layout is a mess and a \
+        clean rebuild is wanted; any manual positioning is lost. Returns \
         { harness_id, cleared: true }."
     )]
     async fn sugo_relayout(

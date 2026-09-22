@@ -3,7 +3,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import cytoscape from "cytoscape";
 import BoardGraph from "./BoardGraph.vue";
 import NodeNameEditor from "./NodeNameEditor.vue";
-import { loadPositions } from "../lib/positions";
+import { loadPositions, savePositions } from "../lib/positions";
 
 vi.mock("../lib/positions", () => ({
   loadPositions: vi.fn(async () => ({})),
@@ -320,5 +320,62 @@ describe("BoardGraph", () => {
     expect(cy.getElementById("c1").position).toHaveBeenCalledWith({ x: 1, y: 2 });
     expect(cy.getElementById("c2").position).toHaveBeenCalledWith({ x: 3, y: 4 });
     expect(computeLayoutMock).not.toHaveBeenCalled();
+  });
+
+  // ── FIX1: sugo_set_layout で1件だけ座標が付いた状態での再発防止 ────────────
+  it("保存済みが1件だけで残りが大半のとき、横一列の追加配置ではなく全体を蛇行レイアウトし直す", async () => {
+    computeLayoutMock.mockClear();
+    (loadPositions as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      c1: { x: 1, y: 2 }, // sugo_set_layout で1件だけ座標が書き込まれた想定
+    });
+
+    mountBoardGraph({
+      cells: [
+        { id: "c1", name: "一", status: "active", terminal: false },
+        { id: "c2", name: "二", status: "active", terminal: false },
+        { id: "c3", name: "三", status: "active", terminal: false },
+        { id: "c4", name: "四", status: "active", terminal: true },
+      ],
+      edges: [
+        { from: "c1", to: "c2", label: "next", guard: null },
+        { from: "c2", to: "c3", label: "next", guard: null },
+        { from: "c3", to: "c4", label: "next", guard: null },
+      ],
+    });
+    await flushPromises();
+
+    // 未配置セル（c2,c3,c4=3件）が全セル（4件）の半数を超えるため、
+    // placeNewNodes() の単純な横一列詰めではなく relayoutAll() 相当の
+    // 蛇行レイアウト再計算（computeLayout）に回るべき。
+    expect(computeLayoutMock).toHaveBeenCalled();
+  });
+
+  // ── FIX2: レイアウト計算中にハーネスが切り替わった場合の保存先誤り防止 ─────
+  it("computeLayout の完了待ち中に harnessId が変わったら、その結果を保存しない", async () => {
+    (savePositions as unknown as ReturnType<typeof vi.fn>).mockClear();
+    let resolveLayout!: (v: { c1: { x: number; y: number }; c2: { x: number; y: number } }) => void;
+    computeLayoutMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveLayout = resolve; }),
+    );
+
+    const wrapper = mount(BoardGraph, {
+      props: {
+        harnessId: "h1",
+        cells: [{ id: "c1", name: "一", status: "active", terminal: true }],
+        edges: [],
+        startCellId: "c1",
+      },
+    });
+    await flushPromises(); // requestAnimationFrame → placeNodes → relayoutAll → computeLayout 呼び出しまで進める
+
+    expect(computeLayoutMock).toHaveBeenCalled();
+
+    // computeLayout が完了する前に別のハーネスへ遷移する
+    await wrapper.setProps({ harnessId: "h2" });
+    resolveLayout({ c1: { x: 10, y: 20 }, c2: { x: 30, y: 20 } });
+    await flushPromises();
+
+    // h1 向けの計算結果を h2 として（あるいは h1 として）保存してはいけない
+    expect(savePositions).not.toHaveBeenCalled();
   });
 });

@@ -205,7 +205,13 @@ const boardGraph = ref<{ relayoutAll: () => Promise<void> } | null>(null);
 
 /** 盤面を蛇行レイアウトで組み直す。手で動かした配置は失われる。 */
 async function onRelayout() {
-  await boardGraph.value?.relayoutAll();
+  try {
+    await boardGraph.value?.relayoutAll();
+  } catch (e) {
+    // 失敗を無音にすると「押しても何も起きなかった（＝整列済み）」と区別が
+    // つかない。他の変更系ハンドラと同じ経路でユーザーに知らせる。
+    handleMutationError(e);
+  }
 }
 
 const selectedCell = computed<Cell | null>(
